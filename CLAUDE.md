@@ -14,6 +14,7 @@ These were agreed with the user (a non-engineer collaborator). They govern how C
 6. **Privacy invariant gets a paragraph every time the hook changes.** Any code path touching the hook payload requires a plain-English explanation of what is sanitized and what is sent. No silent changes to that path.
 7. **No fake data masquerading as real.** Mockup phases use obviously-fake placeholders. When wiring real systems, test with two real browser windows, not stubs.
 8. **Manual testing is the test suite until Phase 7.** The roadmap's per-phase acceptance checks are the tests. Walk the user through them before declaring a phase done.
+9. **Default to doing fiddly technical work yourself, not handing it to the user.** Anything requiring precise syntax — config file edits, JSON/YAML, exact paths, multi-step shell sequences, settings merges — Claude executes directly rather than writing instructions for the user to follow. The user's role is to trigger, test, and decide, not to transcribe. Only put work on the user when it genuinely requires their machine, their input, or their judgment: approving a permission prompt that only their session can handle, running their own Claude Code to fire a real hook, clicking through UI to feel the experience, or choosing between product options. When in doubt, do it yourself and tell the user what changed in plain language.
 
 Two files exist specifically because the user cannot read code:
 - `docs/status.md` — the truth about what currently works. Update it whenever a phase or feature changes state.

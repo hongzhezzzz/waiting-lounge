@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /mnt/c/Users/lucky/Dropbox/ChatApp/local-hook/hook.js start"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /mnt/c/Users/lucky/Dropbox/ChatApp/local-hook/hook.js attention"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /mnt/c/Users/lucky/Dropbox/ChatApp/local-hook/hook.js stop"
+          }
+        ]
+      }
+    ]
+  }
+}
