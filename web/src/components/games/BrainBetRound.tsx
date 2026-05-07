@@ -8,7 +8,8 @@ export type BrainBetRoundType =
   | "chicken"
   | "big_o"
   | "monty_mirage"
-  | "geo_trivia";
+  | "geo_trivia"
+  | "stock_direction";
 
 export type BrainBetRoundView = {
   round: number;
@@ -32,6 +33,7 @@ export type BrainBetRoundView = {
   onBigO: (choice: string) => void;
   onMontyMirage: (value: number) => void;
   onGeoTrivia: (choice: string) => void;
+  onStockDirection: (direction: "up" | "down", magnitude: number) => void;
 };
 
 export function BrainBetRound(p: BrainBetRoundView) {
@@ -83,6 +85,7 @@ export function BrainBetRound(p: BrainBetRoundView) {
   else if (p.roundType === "big_o") body = <BigOView {...p} />;
   else if (p.roundType === "monty_mirage") body = <MontyMirageView {...p} />;
   else if (p.roundType === "geo_trivia") body = <GeoTriviaView {...p} />;
+  else if (p.roundType === "stock_direction") body = <StockDirectionView {...p} />;
 
   return (
     <div>
@@ -98,7 +101,8 @@ function labelFor(t: BrainBetRoundType): string {
   if (t === "chicken") return "Chicken Numbers";
   if (t === "big_o") return "Big-O Showdown";
   if (t === "monty_mirage") return "Monty Mirage";
-  return "Geo Trivia";
+  if (t === "geo_trivia") return "Geo Trivia";
+  return "Stock Direction";
 }
 
 // ---------- Indian Poker ----------
@@ -477,6 +481,146 @@ function GeoTriviaView(p: BrainBetRoundView) {
           <WinLoseLine winner={resolved.winnerSocketId} mySocketId={resolved.mySocketId} />
         </RevealCard>
       )}
+    </div>
+  );
+}
+
+// ---------- Stock Direction ----------
+
+function StockDirectionView(p: BrainBetRoundView) {
+  const payload = p.payload as { visiblePrices: number[]; magnitudeMax: number };
+  const submitted = p.myDecision as { direction: "up" | "down"; magnitude: number } | null;
+  const [pickedDir, setPickedDir] = useState<"up" | "down" | null>(null);
+  const [magDraft, setMagDraft] = useState("");
+  const resolved = p.resolved;
+  const reveal = resolved?.reveal as
+    | {
+        hiddenPrices?: number[];
+        answerDirection?: "up" | "down";
+        answerMagnitude?: number;
+        explanation?: string;
+        submissions?: Record<string, { direction: "up" | "down"; magnitude: number } | undefined>;
+      }
+    | undefined;
+
+  function submit() {
+    if (!pickedDir) return;
+    const v = Number(magDraft);
+    if (!Number.isFinite(v)) return;
+    p.onStockDirection(pickedDir, Math.max(0, Math.min(payload.magnitudeMax, v)));
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-4">
+        <p className="text-sm text-muted uppercase tracking-wider mb-2">First 30 minutes</p>
+        <Sparkline values={payload.visiblePrices} />
+        <p className="text-xs text-muted mt-2 font-mono">
+          {payload.visiblePrices[0]?.toFixed(2)} → {payload.visiblePrices[payload.visiblePrices.length - 1]?.toFixed(2)}
+        </p>
+      </div>
+
+      {!resolved && submitted == null && (
+        <div className="space-y-3">
+          <p className="text-sm text-muted">
+            Predict the next 30 minutes. Direction wins; magnitude is the tiebreaker.
+          </p>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={() => setPickedDir("up")}
+              className={`px-6 py-3 rounded-xl border-2 text-lg ${
+                pickedDir === "up"
+                  ? "border-sage bg-sage-soft text-sage-deep"
+                  : "border-line bg-surface hover:border-sage"
+              }`}
+            >
+              ↑ Up
+            </button>
+            <button
+              onClick={() => setPickedDir("down")}
+              className={`px-6 py-3 rounded-xl border-2 text-lg ${
+                pickedDir === "down"
+                  ? "border-amber-400 bg-amber-100 text-amber-900"
+                  : "border-line bg-surface hover:border-amber-400"
+              }`}
+            >
+              ↓ Down
+            </button>
+          </div>
+          <div className="flex gap-2 items-center justify-center">
+            <span className="text-sm text-muted">Magnitude:</span>
+            <input
+              type="number"
+              min={0}
+              max={payload.magnitudeMax}
+              step={0.1}
+              value={magDraft}
+              onChange={(e) => setMagDraft(e.target.value)}
+              placeholder="0.0"
+              className="w-24 border border-line rounded px-2 py-1 bg-surface focus:border-sage focus:outline-none font-mono text-center"
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+            />
+            <span className="text-sm text-muted">%</span>
+            <button onClick={submit} disabled={!pickedDir || magDraft === ""} className="btn-primary disabled:opacity-50 ml-2">
+              Submit
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!resolved && submitted != null && (
+        <p className="text-center text-sm text-muted">
+          You called <span className="font-mono text-ink">{submitted.direction}</span> by{" "}
+          <span className="font-mono text-ink">{submitted.magnitude.toFixed(1)}%</span>. Waiting for opponent…
+        </p>
+      )}
+
+      {resolved && reveal && (
+        <RevealCard>
+          <p className="text-sm text-muted uppercase tracking-wider">Hidden 30 minutes</p>
+          <Sparkline values={[...payload.visiblePrices, ...(reveal.hiddenPrices ?? [])]} splitAt={30} />
+          <p className="text-sm">
+            Truth: <span className="font-mono text-ink">{reveal.answerDirection === "up" ? "↑ Up" : "↓ Down"} by {reveal.answerMagnitude?.toFixed(2)}%</span>
+          </p>
+          <p className="text-sm">
+            You: <span className="font-mono text-ink">
+              {reveal.submissions?.[resolved.mySocketId ?? ""]
+                ? `${reveal.submissions[resolved.mySocketId ?? ""]!.direction} ${reveal.submissions[resolved.mySocketId ?? ""]!.magnitude.toFixed(1)}%`
+                : "—"}
+            </span>
+            <span className="mx-3">·</span>
+            Opp: <span className="font-mono text-ink">
+              {(() => {
+                const oppEntry = Object.entries(reveal.submissions ?? {}).find(([sid]) => sid !== resolved.mySocketId)?.[1];
+                return oppEntry ? `${oppEntry.direction} ${oppEntry.magnitude.toFixed(1)}%` : "—";
+              })()}
+            </span>
+          </p>
+          {reveal.explanation && <p className="text-xs text-muted italic">{reveal.explanation}</p>}
+          <WinLoseLine winner={resolved.winnerSocketId} mySocketId={resolved.mySocketId} />
+        </RevealCard>
+      )}
+    </div>
+  );
+}
+
+// ASCII sparkline using Unicode block chars. `splitAt` draws a divider
+// between the visible and hidden halves on the reveal screen.
+function Sparkline({ values, splitAt }: { values: number[]; splitAt?: number }) {
+  if (values.length === 0) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const blocks = "▁▂▃▄▅▆▇█";
+  const chars = values.map((v) => {
+    const idx = Math.floor(((v - min) / range) * (blocks.length - 1));
+    return blocks[idx] ?? blocks[0];
+  });
+  return (
+    <div className="font-mono leading-none text-sage-deep text-xl whitespace-pre overflow-x-auto">
+      {chars.map((c, i) => (
+        <span key={i} className={splitAt != null && i === splitAt ? "border-l-2 border-amber-400 pl-0.5" : ""}>{c}</span>
+      ))}
     </div>
   );
 }

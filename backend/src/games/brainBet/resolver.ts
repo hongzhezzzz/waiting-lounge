@@ -27,6 +27,9 @@ const MONTY_BANK = JSON.parse(
 const GEO_BANK = JSON.parse(
   readFileSync(path.join(here, "geoTriviaBank.json"), "utf8"),
 ) as GeoQuestion[];
+const STOCK_BANK = JSON.parse(
+  readFileSync(path.join(here, "stockDirectionBank.json"), "utf8"),
+) as StockQuestion[];
 
 type EstimationQuestion = {
   id: string;
@@ -67,10 +70,16 @@ type GeoQuestion = {
   answer: string;
   explanation: string;
 };
+type StockQuestion = {
+  id: string;
+  prices: number[]; // 60 points; first 30 visible, last 30 hidden
+  answer: { direction: "up" | "down"; magnitude: number };
+  explanation: string;
+};
 
-type RoundType = "indian_poker" | "estimation" | "chicken" | "big_o" | "monty_mirage" | "geo_trivia";
+type RoundType = "indian_poker" | "estimation" | "chicken" | "big_o" | "monty_mirage" | "geo_trivia" | "stock_direction";
 const ALL_ROUND_TYPES: ReadonlyArray<RoundType> = [
-  "indian_poker", "estimation", "chicken", "big_o", "monty_mirage", "geo_trivia",
+  "indian_poker", "estimation", "chicken", "big_o", "monty_mirage", "geo_trivia", "stock_direction",
 ];
 
 const ROUND_TIMEOUT_MS: Record<RoundType, number> = {
@@ -80,6 +89,7 @@ const ROUND_TIMEOUT_MS: Record<RoundType, number> = {
   big_o: 30_000,
   monty_mirage: 30_000,
   geo_trivia: 18_000,
+  stock_direction: 30_000,
 };
 const POST_ROUND_PAUSE_MS = 3000;
 const DISCONNECT_GRACE_MS = 10_000;
@@ -135,7 +145,17 @@ type GeoTriviaState = {
   locks: Record<SocketId, string | undefined>;
 };
 
-type RoundState = IndianPokerState | EstimationState | ChickenState | BigOState | MontyMirageState | GeoTriviaState;
+type StockDirectionState = {
+  type: "stock_direction";
+  questionId: string;
+  visiblePrices: number[]; // first 30
+  hiddenPrices: number[];  // last 30
+  answerDirection: "up" | "down";
+  answerMagnitude: number; // % change from prices[29] to prices[59]
+  submissions: Record<SocketId, { direction: "up" | "down"; magnitude: number } | undefined>;
+};
+
+type RoundState = IndianPokerState | EstimationState | ChickenState | BigOState | MontyMirageState | GeoTriviaState | StockDirectionState;
 
 type Round = {
   index: number;
@@ -157,6 +177,7 @@ type State = {
   usedBigOIds: Set<string>;
   usedMontyIds: Set<string>;
   usedGeoIds: Set<string>;
+  usedStockIds: Set<string>;
   roundTimer: NodeJS.Timeout | null;
   postRoundTimer: NodeJS.Timeout | null;
   disconnectTimers: Record<SocketId, NodeJS.Timeout>;
@@ -179,6 +200,7 @@ export class BrainBetGame implements GameRunner {
       usedBigOIds: new Set(),
       usedMontyIds: new Set(),
       usedGeoIds: new Set(),
+      usedStockIds: new Set(),
       roundTimer: null,
       postRoundTimer: null,
       disconnectTimers: {},
@@ -283,8 +305,7 @@ export class BrainBetGame implements GameRunner {
         endsAt: round.endsAt,
         payload: { prompt: q?.prompt ?? "" },
       });
-    } else {
-      // geo_trivia
+    } else if (type === "geo_trivia") {
       const gs = roundState as GeoTriviaState;
       const q = GEO_BANK.find((x) => x.id === gs.questionId);
       this.io.to(this.game.roomId).emit("game_state_update", {
@@ -296,6 +317,19 @@ export class BrainBetGame implements GameRunner {
         scores: this.publicScores(),
         endsAt: round.endsAt,
         payload: { prompt: q?.prompt ?? "", choices: q?.choices ?? [] },
+      });
+    } else {
+      // stock_direction — only the first 30 prices are sent to clients.
+      const ss = roundState as StockDirectionState;
+      this.io.to(this.game.roomId).emit("game_state_update", {
+        gameId: this.game.id,
+        type: "round_start",
+        roundType: "stock_direction",
+        round: round.index,
+        total: round.total,
+        scores: this.publicScores(),
+        endsAt: round.endsAt,
+        payload: { visiblePrices: ss.visiblePrices, magnitudeMax: 20 },
       });
     }
 
@@ -344,6 +378,21 @@ export class BrainBetGame implements GameRunner {
       const q = arr[Math.floor(Math.random() * arr.length)];
       this.state.usedGeoIds.add(q.id);
       return { type, questionId: q.id, answer: q.answer, locks: {} };
+    }
+    if (type === "stock_direction") {
+      const pool = STOCK_BANK.filter((q) => !this.state.usedStockIds.has(q.id));
+      const arr = pool.length > 0 ? pool : STOCK_BANK;
+      const q = arr[Math.floor(Math.random() * arr.length)];
+      this.state.usedStockIds.add(q.id);
+      return {
+        type,
+        questionId: q.id,
+        visiblePrices: q.prices.slice(0, 30),
+        hiddenPrices: q.prices.slice(30, 60),
+        answerDirection: q.answer.direction,
+        answerMagnitude: q.answer.magnitude,
+        submissions: {},
+      };
     }
     return { type: "chicken", picks: {} };
   }
@@ -429,6 +478,25 @@ export class BrainBetGame implements GameRunner {
       this.handleLockAnswer(round, socketId, String(a.choice ?? ""), () => this.resolveGeoTrivia(round));
       return;
     }
+
+    if (round.type === "stock_direction" && a.type === "stock_direction_submit") {
+      const ss = round.state as StockDirectionState;
+      if (ss.submissions[socketId] != null) return;
+      const ax = a as { direction?: string; magnitude?: number };
+      if (ax.direction !== "up" && ax.direction !== "down") return;
+      if (typeof ax.magnitude !== "number" || !Number.isFinite(ax.magnitude)) return;
+      const mag = Math.max(0, Math.min(20, ax.magnitude));
+      ss.submissions[socketId] = { direction: ax.direction, magnitude: mag };
+      this.io.to(socketId).emit("game_state_update", {
+        gameId: this.game.id,
+        type: "submission_recorded",
+        round: round.index,
+        value: { direction: ax.direction, magnitude: mag },
+      });
+      const allSubmitted = this.game.players.every((p) => ss.submissions[p.socketId] != null);
+      if (allSubmitted) this.resolveStockDirection(round);
+      return;
+    }
   }
 
   // Shared helper for "first correct lock wins" round types (Big-O, Geo Trivia).
@@ -485,6 +553,34 @@ export class BrainBetGame implements GameRunner {
 
   private resolveGeoTrivia(round: Round) {
     this.finishRound(round, null, this.lockReveal(round));
+  }
+
+  private resolveStockDirection(round: Round) {
+    const ss = round.state as StockDirectionState;
+    const [a, b] = this.game.players;
+    const aSub = ss.submissions[a.socketId];
+    const bSub = ss.submissions[b.socketId];
+    let winnerSocketId: SocketId | null = null;
+    const aRight = aSub?.direction === ss.answerDirection;
+    const bRight = bSub?.direction === ss.answerDirection;
+    if (aRight && bRight) {
+      // Both got direction — closer magnitude wins. Strict tie → no winner.
+      const aDist = Math.abs((aSub?.magnitude ?? 0) - ss.answerMagnitude);
+      const bDist = Math.abs((bSub?.magnitude ?? 0) - ss.answerMagnitude);
+      if (aDist < bDist) winnerSocketId = a.socketId;
+      else if (bDist < aDist) winnerSocketId = b.socketId;
+    } else if (aRight) winnerSocketId = a.socketId;
+    else if (bRight) winnerSocketId = b.socketId;
+    // both wrong → no winner
+
+    const q = STOCK_BANK.find((x) => x.id === ss.questionId);
+    this.finishRound(round, winnerSocketId, {
+      hiddenPrices: ss.hiddenPrices,
+      answerDirection: ss.answerDirection,
+      answerMagnitude: ss.answerMagnitude,
+      explanation: q?.explanation ?? "",
+      submissions: ss.submissions,
+    });
   }
 
   private resolveMontyMirage(round: Round) {
@@ -612,7 +708,8 @@ export class BrainBetGame implements GameRunner {
     else if (round.type === "chicken") this.resolveChicken(round);
     else if (round.type === "big_o") this.resolveBigO(round);
     else if (round.type === "monty_mirage") this.resolveMontyMirage(round);
-    else this.resolveGeoTrivia(round);
+    else if (round.type === "geo_trivia") this.resolveGeoTrivia(round);
+    else this.resolveStockDirection(round);
   }
 
   handleDisconnect(socketId: SocketId) {

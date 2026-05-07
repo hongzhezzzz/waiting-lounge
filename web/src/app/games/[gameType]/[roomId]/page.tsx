@@ -321,6 +321,9 @@ export default function GameRoomPage() {
             setBbRound((prev) => prev ? { ...prev, myDecision: choice } : prev);
             emitAction({ type: "geo_trivia_lock", choice });
           }}
+          onStockDirection={(direction, magnitude) =>
+            emitAction({ type: "stock_direction_submit", direction, magnitude })
+          }
         />
         <ChatPanel myHandle={myHandle} peerHandle={peerHandle} />
       </div>
