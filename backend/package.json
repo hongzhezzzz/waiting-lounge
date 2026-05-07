@@ -6,7 +6,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p .",
+    "build": "tsc -p . && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p ."
   },
