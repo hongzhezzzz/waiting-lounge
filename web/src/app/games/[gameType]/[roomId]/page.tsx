@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { useInGame } from "@/lib/inGame";
 import { SpotTheBugRound, type Snippet } from "@/components/games/SpotTheBugRound";
 import { BrainBetRound, type BrainBetRoundType } from "@/components/games/BrainBetRound";
+import { ChatPanel } from "@/components/games/ChatPanel";
 
 // ---------- shared end-state shapes ----------
 
@@ -277,6 +278,7 @@ export default function GameRoomPage() {
           myClick={stbRound.myClick}
           onClickLine={(line) => emitAction({ type: "click_line", line })}
         />
+        <ChatPanel myHandle={myHandle} peerHandle={peerHandle} />
       </div>
     );
   }
@@ -320,6 +322,7 @@ export default function GameRoomPage() {
             emitAction({ type: "geo_trivia_lock", choice });
           }}
         />
+        <ChatPanel myHandle={myHandle} peerHandle={peerHandle} />
       </div>
     );
   }
