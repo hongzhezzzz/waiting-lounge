@@ -52,17 +52,18 @@ Local MVP is complete. Beyond this, everything needs accounts/infra:
 
 ## Deployment in flight (2026-05-06 evening)
 
-Public deploy is mostly wired. Currently **one CORS env var away** from working end-to-end:
+Public deploy is wired end-to-end. CORS env var has been updated on Render and the redeploy is live:
 - **Frontend:** `https://waiting-lounge.vercel.app` (Vercel, auto-deploys from `main`)
-- **Backend:** `https://waiting-lounge.onrender.com` (Render web service, auto-deploys on push)
+- **Backend:** `https://waiting-lounge.onrender.com` (Render web service `waiting-lounge`, id `srv-d7u05ovavr4c73d5h1t0`, auto-deploys on push)
 - **Database:** Supabase Postgres (`aws-1-us-west-2.pooler.supabase.com`), pooler connection
 - **Local hook:** points at Render via `~/.waiting-lounge/backend_url`
+- **Render env:** `ALLOWED_ORIGINS=http://localhost:3000,https://waiting-lounge.vercel.app` (deploy `dep-d7u0r0lckfvc73eg72hg` went live 2026-05-07 03:57 UTC).
 
-Pending step: update Render's `ALLOWED_ORIGINS` env var from `http://localhost:3000` to `http://localhost:3000,https://waiting-lounge.vercel.app` so the browser can talk to the backend. User chose to install Render's official MCP server (`https://mcp.render.com/mcp`, project scope) instead of clicking through the Render UI. After Claude Code restart, the next session should:
-1. Use the Render MCP `update_env_vars` (or equivalent) tool to set `ALLOWED_ORIGINS` on the `waiting-lounge-backend` service to the comma-separated value above.
-2. Wait for Render to redeploy.
-3. Walk the user through pairing on the Vercel URL: `https://waiting-lounge.vercel.app/pair?d=<their device id from ~/.waiting-lounge/device_id>` and verifying the badge updates from real Claude Code activity.
-4. Then proceed to **Phase 9: CLI installer**.
+Awaiting the user's manual round-trip test:
+1. Open `https://waiting-lounge.vercel.app/pair?d=<device id from ~/.waiting-lounge/device_id>` to pair the browser with their local Claude Code device.
+2. Send a prompt to a Claude Code session in this folder; verify the header badge flips through "Claude is working" → "Claude needs your attention" → "Claude may be done".
+
+Once that confirms, proceed to **Phase 9: CLI installer**.
 
 ## Last updated
 2026-05-06

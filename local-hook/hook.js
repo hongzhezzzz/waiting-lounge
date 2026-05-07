@@ -57,6 +57,7 @@ if (process.stdin.isTTY) {
 function finish() {
   const status =
     event === "start" ? "waiting" :
+    event === "resume" ? "waiting" :
     event === "attention" ? "needs_attention" :
     event === "stop" ? "done" :
     "unknown";

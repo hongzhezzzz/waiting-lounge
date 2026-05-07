@@ -22,6 +22,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /mnt/c/Users/lucky/Dropbox/ChatApp/local-hook/hook.js resume"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
