@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { getSocket } from "@/lib/socket";
 import { useAuth } from "@/lib/auth";
+import { useInGame } from "@/lib/inGame";
 import { SpotTheBugRound, type Snippet } from "@/components/games/SpotTheBugRound";
 
 type RoundState = {
@@ -60,6 +61,15 @@ export default function GameRoomPage() {
   const [round, setRound] = useState<RoundState | null>(null);
   const [final, setFinal] = useState<FinalState | null>(null);
   const [aborted, setAborted] = useState<string | null>(null);
+
+  // Tell the layout we're in a game (so header/nav links + tab close ask
+  // for confirmation). Cleared as soon as the game ends or on unmount.
+  const { setInGame } = useInGame();
+  useEffect(() => {
+    const active = !final && !aborted;
+    setInGame(active);
+    return () => setInGame(false);
+  }, [final, aborted, setInGame]);
 
   useEffect(() => {
     if (loading) return;

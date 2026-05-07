@@ -81,6 +81,23 @@ export function AgentStatusProvider({ children }: { children: ReactNode }) {
     };
   }, [deviceId]);
 
+  // Auto-downgrade `needs_attention` to `done` after 90s with no further
+  // events. Catches several edge cases that the hooks themselves miss:
+  // Claude Code's interrupt button (no Stop / PostToolUse fires), the
+  // assistant turn ending while a Notification was the last event, and
+  // closed Claude Code processes (no SessionEnd).
+  useEffect(() => {
+    if (meta.status !== "needs_attention") return;
+    const t = setTimeout(() => {
+      setMeta((m) =>
+        m.status === "needs_attention"
+          ? { ...m, status: "done", ts: Date.now() }
+          : m,
+      );
+    }, 90_000);
+    return () => clearTimeout(t);
+  }, [meta.status, meta.ts]);
+
   const simulate = useCallback((status: AgentStatus) => {
     setMeta((prev) => ({ ...prev, status, ts: Date.now(), source: "demo" }));
   }, []);
