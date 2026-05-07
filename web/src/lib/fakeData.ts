@@ -39,8 +39,8 @@ export const GAMES = [
   {
     id: "brain_bet" as const,
     label: "Brain Bet",
-    description: "Mixed-bag head-to-head: estimation, poker, and more. Coming Phase 12.",
-    enabled: false,
+    description: "Mixed-bag head-to-head: estimation, asymmetric poker, and chicken numbers. Random round each turn.",
+    enabled: true,
   },
 ] as const;
 export type GameTypeId = (typeof GAMES)[number]["id"];

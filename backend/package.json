@@ -6,7 +6,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p . && mkdir -p dist/db dist/games/spotTheBug && cp src/db/schema.sql dist/db/schema.sql && cp src/games/spotTheBug/snippets.json dist/games/spotTheBug/snippets.json",
+    "build": "tsc -p . && mkdir -p dist/db dist/games/spotTheBug dist/games/brainBet && cp src/db/schema.sql dist/db/schema.sql && cp src/games/spotTheBug/snippets.json dist/games/spotTheBug/snippets.json && cp src/games/brainBet/estimationBank.json dist/games/brainBet/estimationBank.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p ."
   },
