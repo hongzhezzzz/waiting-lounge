@@ -9,6 +9,14 @@ import { getSocket } from "@/lib/socket";
 import { GAMES, GAME_DURATIONS, DEFAULT_ANTE, type GameTypeId, type GameDuration } from "@/lib/fakeData";
 
 type IdleUser = { handle: string; userId: string; socketId: string };
+type PoolGameType = "brain_bet" | "spot_the_bug";
+
+const POOL_GAMES: { id: PoolGameType; label: string }[] = [
+  { id: "brain_bet", label: "Brain Bet" },
+  { id: "spot_the_bug", label: "Spot the Bug" },
+];
+const POOL_ANTE = 100;
+const POOL_DURATION_LABEL = "5-min match";
 
 export default function LoungePage() {
   const { session } = useAuth();
@@ -20,10 +28,9 @@ export default function LoungePage() {
   const [pendingTarget, setPendingTarget] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [declinedMsg, setDeclinedMsg] = useState<string | null>(null);
+  const [poolMatching, setPoolMatching] = useState<PoolGameType | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Poll idle users while signed in. Backend caps lookups; we throttle to
-  // 10s so the friend pilot doesn't hammer the server.
   useEffect(() => {
     if (!session) return;
     const socket = getSocket();
@@ -32,6 +39,7 @@ export default function LoungePage() {
     }
     function onError(p: { message?: string }) {
       setErrorMsg(p?.message ?? "Error.");
+      setPoolMatching(null);
     }
     function onSent(p: { inviteId: string; targetHandle: string }) {
       setPendingInviteId(p.inviteId);
@@ -49,8 +57,14 @@ export default function LoungePage() {
       setDeclinedMsg("Invite expired without an answer.");
       window.setTimeout(() => setDeclinedMsg(null), 3000);
     }
+    function onPoolWaiting() {
+      // Server confirmed we're in the pool. UI already shows "Matching…".
+    }
+    function onQueueCancelled() {
+      setPoolMatching(null);
+    }
     function onStarted(p: { gameId: string; roomId: string; gameType: string; peerHandle: string }) {
-      // Inviter side: when the target accepts, server emits game_started.
+      setPoolMatching(null);
       router.push(`/games/${p.gameType}/${p.roomId}?gameId=${p.gameId}&peer=${encodeURIComponent(p.peerHandle)}`);
     }
 
@@ -59,6 +73,8 @@ export default function LoungePage() {
     socket.on("invite_sent", onSent);
     socket.on("invite_declined", onDeclined);
     socket.on("invite_expired", onExpired);
+    socket.on("pool_waiting", onPoolWaiting);
+    socket.on("game_queue_cancelled", onQueueCancelled);
     socket.on("game_started", onStarted);
 
     socket.emit("list_idle_users");
@@ -70,13 +86,22 @@ export default function LoungePage() {
       socket.off("invite_sent", onSent);
       socket.off("invite_declined", onDeclined);
       socket.off("invite_expired", onExpired);
+      socket.off("pool_waiting", onPoolWaiting);
+      socket.off("game_queue_cancelled", onQueueCancelled);
       socket.off("game_started", onStarted);
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [session, router]);
 
+  function findMatch(gameType: PoolGameType) {
+    setPoolMatching(gameType);
+    getSocket().emit("queue_for_pool", { gameType });
+  }
+  function cancelMatch() {
+    getSocket().emit("cancel_game_queue");
+    setPoolMatching(null);
+  }
   function cancelPending() {
-    // Server has no explicit cancel; we just clear UI and let the 30s expiry run out.
     setPendingInviteId(null);
     setPendingTarget(null);
   }
@@ -86,18 +111,24 @@ export default function LoungePage() {
       <div className="max-w-2xl mx-auto px-6 py-12 space-y-4">
         <h1 className="text-2xl font-medium text-ink">Lounge</h1>
         <p className="text-sm text-muted">
-          Sign in to see who&apos;s online and challenge them to a game.
+          Sign in to find a match or challenge a specific player.
         </p>
         <Link href="/login" className="btn-primary inline-block">Sign in</Link>
       </div>
     );
   }
 
+  const balance = points ?? 0;
+  const canPool = balance >= POOL_ANTE;
+  const matchingLabel = poolMatching === "brain_bet" ? "Brain Bet" : poolMatching === "spot_the_bug" ? "Spot the Bug" : "";
+
   return (
     <div className="max-w-2xl mx-auto px-6 py-12 space-y-6">
       <div>
         <h1 className="text-2xl font-medium text-ink">Lounge</h1>
-        <p className="text-sm text-muted">Signed-in players, currently idle. Click to challenge.</p>
+        <p className="text-sm text-muted">
+          Hit Find a match for the fastest pairing, or challenge a specific player below.
+        </p>
       </div>
 
       {errorMsg && (
@@ -110,6 +141,43 @@ export default function LoungePage() {
         <div className="card p-3 bg-amber-50 text-sm text-amber-900">{declinedMsg}</div>
       )}
 
+      {/* Pool matchmaking — primary CTA */}
+      <div className="card p-5 space-y-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-ink">Find a match</div>
+            <div className="text-xs text-muted">{POOL_DURATION_LABEL} · {POOL_ANTE} pt ante · pairs with the next idle player</div>
+          </div>
+          {poolMatching && (
+            <button onClick={cancelMatch} className="text-xs text-muted hover:text-ink underline whitespace-nowrap">
+              Cancel
+            </button>
+          )}
+        </div>
+        {poolMatching ? (
+          <div className="flex items-center gap-2 text-sm text-muted">
+            <span className="inline-block w-2 h-2 rounded-full bg-sage-deep animate-pulse" aria-hidden />
+            Matching for {matchingLabel}…
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {POOL_GAMES.map((g, i) => (
+              <button
+                key={g.id}
+                onClick={() => findMatch(g.id)}
+                disabled={!canPool || pendingInviteId !== null}
+                className={`${i === 0 ? "btn-primary" : "btn-secondary"} disabled:opacity-50`}
+              >
+                {g.label}
+              </button>
+            ))}
+            {!canPool && (
+              <span className="text-xs text-amber-700 self-center">Not enough points (need {POOL_ANTE}).</span>
+            )}
+          </div>
+        )}
+      </div>
+
       {pendingInviteId && (
         <div className="card p-4 bg-sage-soft/40 flex items-center justify-between">
           <span className="text-sm">
@@ -121,34 +189,37 @@ export default function LoungePage() {
         </div>
       )}
 
-      {idleUsers.length === 0 && (
-        <div className="card p-6 text-center text-muted text-sm">
-          No one else is idle right now. Tell a friend to{" "}
-          <code className="font-mono text-ink">/login</code> and refresh.
-        </div>
-      )}
+      <div>
+        <h2 className="text-xs text-muted uppercase tracking-wider mb-2">Or challenge someone specific</h2>
 
-      {idleUsers.length > 0 && (
-        <ul className="space-y-2">
-          {idleUsers.map((u) => (
-            <li key={u.userId} className="card px-5 py-4 flex items-center justify-between text-sm">
-              <span className="font-mono text-ink">{u.handle}</span>
-              <button
-                onClick={() => setTarget(u)}
-                disabled={pendingInviteId !== null}
-                className="btn-secondary disabled:opacity-50"
-              >
-                Challenge
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+        {idleUsers.length === 0 && (
+          <div className="card p-6 text-center text-muted text-sm">
+            No one else is idle right now. Use Find a match above and we&apos;ll pair you with the next player.
+          </div>
+        )}
+
+        {idleUsers.length > 0 && (
+          <ul className="space-y-2">
+            {idleUsers.map((u) => (
+              <li key={u.userId} className="card px-5 py-4 flex items-center justify-between text-sm">
+                <span className="font-mono text-ink">{u.handle}</span>
+                <button
+                  onClick={() => setTarget(u)}
+                  disabled={pendingInviteId !== null || poolMatching !== null}
+                  className="btn-secondary disabled:opacity-50"
+                >
+                  Challenge
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       {target && (
         <ChallengeModal
           target={target}
-          balance={points ?? 0}
+          balance={balance}
           onClose={() => setTarget(null)}
         />
       )}
