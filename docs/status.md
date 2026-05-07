@@ -3,11 +3,9 @@
 The truth about what currently works — not what is planned. Updated whenever a phase or feature changes state.
 
 ## Current phase
-Phase 9 — **done.** `waiting-lounge install|pair|status|test|uninstall` works via `npx --yes github:hongzhezzzz/waiting-lounge ...`. End-to-end verified on this machine: install pulled from GitHub, preserved the existing device id, and printed the right settings JSON; `test` posted a real event to Render and the open lounge tab picked it up.
+**Phase 11 — code complete locally.** Auth + points + the first competitive game are wired end-to-end. Pending production deploy until the user supplies Supabase Auth keys and enables email OTP in the Supabase dashboard (see "What's blocked" below).
 
-Phase 8 (deploy) is fully wired: Vercel + Render + Supabase, with the badge replaying the device's last known status when a browser pairs, and `PostToolUse` hooks flipping the badge back to "working" after a permission is approved. Known edge cases logged in `docs/decisions.md`.
-
-Up next: Phase 10 (beta) — give the install command to a real friend and watch what breaks.
+Pilot (Phase 10) concluded — moving on. Next stage is the competitive-games arc (11→14, see plan in `~/.claude/plans/magical-frolicking-glade.md`).
 
 ## What works
 - Phase 1 hook fires live from a real Claude Code session and writes sanitized events to `~/.waiting-lounge.log`.
@@ -21,12 +19,31 @@ Up next: Phase 10 (beta) — give the install command to a real friend and watch
   - **Pair page** `/pair?d=<uuid>` validates the id, stores it in localStorage, and redirects to `/join`. If you visit `/pair` with no param it shows the pairing instructions instead.
   - **Settings** page now shows whether this browser is paired (with a short prefix of the deviceId) and offers an "Unpair" button.
 - **Privacy verified end-to-end:** piping `{"prompt":"DO_NOT_LEAK","cwd":"/tmp/secret"}` into `node local-hook/hook.js attention` produced only `agent_event {deviceIdShort, status, delivered}` in the backend log — zero leakage.
+- **Phase 11 (code complete, local):**
+  - **Schema:** `users`, `device_account_bindings`, `game_rounds`, `point_transactions`, `pending_refunds` tables exist on Supabase. Idempotent — applies on backend startup.
+  - **Atomic points:** `chargeAntes` deducts both players in a single transaction with `SELECT … FOR UPDATE`, writes `pending_refunds` rows. `settleGame` clears those rows + credits winner. `processStalePendingRefunds()` runs at backend startup to recover antes from games that died mid-flight. **Smoke-tested against live DB:** ante 100 → 900, win → 1100, tie → 1000, abort → 1000.
+  - **Auth:** Supabase OTP-email sign-in. Backend verifies the JWT with the project's `SUPABASE_JWT_SECRET` (HS256, via `jose`). Anonymous sockets still work for chat/board/lounge; only game events require auth.
+  - **Spot the Bug:** ~30 hand-curated buggy snippets in `backend/src/games/spotTheBug/snippets.json`. 3/6/10 rounds for 1/5/10-min games. 45-second round timer, 2.5-second post-round pause. **End-to-end test passing:** two clients with locally-signed JWTs queue, match, alice always clicks the correct line, after 3 rounds alice = 1100 / bob = 900.
+  - **Frontend:** `/login` (OTP two-step), `/me` (profile + balance + bind device), `/games/[gameType]/[roomId]` (game shell), `BalanceChip` in header, `Game` mode added to `/join` with game-type / duration / ante picker.
+  - **Anti-abuse:** self-match rejected; device-account binding 409s on conflict; 10 s disconnect grace before forfeit; cold-start refund covers mid-game backend deaths.
 
 ## What's in progress
-Nothing — waiting on the user to pick a first friend and hand them the install command.
+Nothing — Phase 11 local code is settled. End-to-end script tests (`backend/test-game-e2e.mjs`, `backend/test-refund.mjs`) PASS.
 
 ## What's blocked
-Nothing.
+**Production deploy of Phase 11** is blocked on three things only the user / Supabase dashboard can do:
+1. Enable **email OTP** in Supabase: dashboard → Authentication → Providers → Email → toggle "Enable Email Provider" + "Email OTP."
+2. Copy these values from Supabase dashboard → Settings → API:
+   - **Project URL** (e.g. `https://aapjsnfzhwsvhueyclgq.supabase.co`)
+   - **anon / public key** (for the frontend)
+   - **JWT Secret** (under "JWT Settings" — for the backend)
+3. Set them on the deploy targets:
+   - **Render** (backend service `waiting-lounge`): add env var `SUPABASE_JWT_SECRET=<jwt secret>`. Trigger redeploy.
+   - **Vercel** (project `waiting-lounge`): add `NEXT_PUBLIC_SUPABASE_URL=<project url>` and `NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>`. Trigger redeploy.
+   - **Local `backend/.env`** already has a placeholder; replace with the real JWT secret.
+   - **Local `web/.env.local`** does not exist yet — create with the same `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+
+Until then, the lounge runs as before in prod (chat / board / lounge / install all unaffected) and the new `/login`, `/me`, and Game-mode UI show "Sign-in is not configured yet."
 
 ## How a friend installs (the one-liner)
 
@@ -53,14 +70,11 @@ Paste the printed JSON into `~/.claude/settings.json`, click the printed pair UR
 
 4. The "▶ demo Claude-needs-you alert" button on `/chat` and `/board` still works — it now goes through the same provider, so you can preview the overlay without firing a real event.
 
-## What's next (after Phase 5 passes)
-Local MVP is complete. Beyond this, everything needs accounts/infra:
-
-- **Phase 6:** swap in-memory state for Postgres + Redis (needs Supabase + Upstash accounts, or Docker locally).
-- **Phase 7:** harden safety controls (rate limits, secret-pattern warning, persistent block).
-- **Phase 8:** deploy (Vercel + Render/Railway/Fly + Supabase + Upstash + a domain).
-- **Phase 9:** CLI installer (`waiting-lounge install|status|test|uninstall`).
-- **Phase 10:** small beta with 3-5 trusted users.
+## What's next
+- **Phase 11 prod deploy** (blocked on Supabase keys, see above).
+- **Phase 12:** Brain Bet — mixed-bag gambling game with 3 starter round types (Indian Poker, Estimation Battle, Chicken Numbers). Same framework as Spot the Bug; small per-round resolver classes.
+- **Phase 13:** more Brain Bet round types (Stock Direction, Big-O Showdown, Pixel Reveal, Monty Mirage, Geo Trivia).
+- **Phase 14:** leaderboard, lazy daily +100 refill on first sign-in of the day, chat-while-gaming, invite-from-lounge, game history.
 
 ## Deployment in flight (2026-05-06 evening)
 
@@ -78,4 +92,4 @@ Awaiting the user's manual round-trip test:
 Once that confirms, proceed to **Phase 9: CLI installer**.
 
 ## Last updated
-2026-05-06
+2026-05-07 (Phase 11 local)

@@ -1,0 +1,430 @@
+[
+  {
+    "id": "off_by_one_avg",
+    "language": "javascript",
+    "code": [
+      "function avg(nums) {",
+      "  let sum = 0;",
+      "  for (let i = 0; i <= nums.length; i++) {",
+      "    sum += nums[i];",
+      "  }",
+      "  return sum / nums.length;",
+      "}"
+    ],
+    "buggy_line": 3,
+    "explanation": "Loop runs one too many iterations: i <= nums.length should be i < nums.length, otherwise nums[nums.length] is undefined and the sum becomes NaN."
+  },
+  {
+    "id": "missing_await_fetch",
+    "language": "javascript",
+    "code": [
+      "async function getUser(id) {",
+      "  const res = fetch(`/api/users/${id}`);",
+      "  if (!res.ok) {",
+      "    throw new Error('not found');",
+      "  }",
+      "  const data = await res.json();",
+      "  return data;",
+      "}"
+    ],
+    "buggy_line": 2,
+    "explanation": "fetch returns a Promise, not a Response. Missing await on line 2 means res.ok is undefined and res.json() will throw."
+  },
+  {
+    "id": "mutate_during_iter",
+    "language": "javascript",
+    "code": [
+      "function removeOdds(xs) {",
+      "  for (let i = 0; i < xs.length; i++) {",
+      "    if (xs[i] % 2 === 1) {",
+      "      xs.splice(i, 1);",
+      "    }",
+      "  }",
+      "  return xs;",
+      "}"
+    ],
+    "buggy_line": 4,
+    "explanation": "Splicing during iteration skips the next element — index advances past the new occupant of position i. Need i-- after the splice or a reverse loop."
+  },
+  {
+    "id": "var_in_loop_closure",
+    "language": "javascript",
+    "code": [
+      "function makeCounters(n) {",
+      "  const fns = [];",
+      "  for (var i = 0; i < n; i++) {",
+      "    fns.push(() => i);",
+      "  }",
+      "  return fns;",
+      "}",
+      "// makeCounters(3).map(f => f()) returns [3,3,3] not [0,1,2]"
+    ],
+    "buggy_line": 3,
+    "explanation": "var is function-scoped so all closures share the same i. Use let to get block scope per iteration."
+  },
+  {
+    "id": "string_number_compare",
+    "language": "javascript",
+    "code": [
+      "function isAdult(age) {",
+      "  if (age > '17') {",
+      "    return true;",
+      "  }",
+      "  return false;",
+      "}",
+      "// isAdult('5') returns true"
+    ],
+    "buggy_line": 2,
+    "explanation": "Comparing to a string '17' triggers lexicographic-ish comparison when the other side is a string: '5' > '17' is true. Use a numeric literal."
+  },
+  {
+    "id": "shallow_copy_default",
+    "language": "javascript",
+    "code": [
+      "function addItem(item, list = []) {",
+      "  list.push(item);",
+      "  return list;",
+      "}",
+      "addItem('a');",
+      "addItem('b');",
+      "// second call returns ['a','b'] not ['b']"
+    ],
+    "buggy_line": 1,
+    "explanation": "The default value is evaluated once. The shared default array gets mutated across calls. Use list = list ?? [] inside the function instead."
+  },
+  {
+    "id": "assignment_in_if",
+    "language": "javascript",
+    "code": [
+      "function isReady(state) {",
+      "  if (state.ready = true) {",
+      "    return 'go';",
+      "  }",
+      "  return 'wait';",
+      "}"
+    ],
+    "buggy_line": 2,
+    "explanation": "Single = is assignment, not comparison. The state is mutated and the if always succeeds."
+  },
+  {
+    "id": "null_chain_access",
+    "language": "javascript",
+    "code": [
+      "function fullName(user) {",
+      "  const first = user.profile.first;",
+      "  const last = user.profile.last;",
+      "  return `${first} ${last}`;",
+      "}",
+      "fullName({});  // throws"
+    ],
+    "buggy_line": 2,
+    "explanation": "user.profile is undefined, so accessing .first throws. Use optional chaining (user.profile?.first) or guard."
+  },
+  {
+    "id": "foreach_no_return",
+    "language": "javascript",
+    "code": [
+      "function findEven(xs) {",
+      "  xs.forEach((x) => {",
+      "    if (x % 2 === 0) {",
+      "      return x;",
+      "    }",
+      "  });",
+      "}"
+    ],
+    "buggy_line": 2,
+    "explanation": "forEach ignores return values and does not let you exit early. The function always returns undefined. Use find or a for-loop."
+  },
+  {
+    "id": "float_equality",
+    "language": "javascript",
+    "code": [
+      "function isExact(a, b) {",
+      "  if (a + b === 0.3) {",
+      "    return true;",
+      "  }",
+      "  return false;",
+      "}",
+      "// isExact(0.1, 0.2) returns false"
+    ],
+    "buggy_line": 2,
+    "explanation": "0.1 + 0.2 is 0.30000000000000004 in IEEE 754. Compare with abs(a + b - 0.3) < epsilon."
+  },
+  {
+    "id": "spread_nullable",
+    "language": "javascript",
+    "code": [
+      "function merge(a, b) {",
+      "  return { ...a, ...b };",
+      "}",
+      "merge(null, { x: 1 });  // throws"
+    ],
+    "buggy_line": 2,
+    "explanation": "Spreading null in an object literal throws TypeError in strict ES versions / undefined fields elsewhere. Guard with a default: { ...(a || {}), ...(b || {}) }."
+  },
+  {
+    "id": "missing_return_recursive",
+    "language": "javascript",
+    "code": [
+      "function findInTree(node, target) {",
+      "  if (node.value === target) return node;",
+      "  for (const child of node.children) {",
+      "    findInTree(child, target);",
+      "  }",
+      "  return null;",
+      "}"
+    ],
+    "buggy_line": 4,
+    "explanation": "Recursive call's return value is ignored, so a hit deep in the tree is lost. Should be: const found = findInTree(child, target); if (found) return found;"
+  },
+  {
+    "id": "and_vs_double_and",
+    "language": "javascript",
+    "code": [
+      "function canEdit(user) {",
+      "  if (user.loggedIn & user.isAdmin) {",
+      "    return true;",
+      "  }",
+      "  return false;",
+      "}"
+    ],
+    "buggy_line": 2,
+    "explanation": "Single & is bitwise AND. With booleans it usually still works coercively but breaks for non-0/1 truthy values. Use && for logical AND."
+  },
+  {
+    "id": "json_parse_no_try",
+    "language": "javascript",
+    "code": [
+      "function getConfig(raw) {",
+      "  const cfg = JSON.parse(raw);",
+      "  return cfg.debug === true;",
+      "}",
+      "// getConfig('') throws"
+    ],
+    "buggy_line": 2,
+    "explanation": "JSON.parse throws on invalid input (including empty string). Wrap in try/catch or pre-validate."
+  },
+  {
+    "id": "promise_all_no_await",
+    "language": "javascript",
+    "code": [
+      "async function fetchAll(urls) {",
+      "  const results = [];",
+      "  urls.forEach(async (u) => {",
+      "    const r = await fetch(u);",
+      "    results.push(await r.json());",
+      "  });",
+      "  return results;",
+      "}"
+    ],
+    "buggy_line": 3,
+    "explanation": "forEach does not await async callbacks; results is empty when returned. Use for...of with await, or Promise.all(urls.map(...))."
+  },
+  {
+    "id": "event_listener_leak",
+    "language": "javascript",
+    "code": [
+      "function attach(btn, handler) {",
+      "  btn.addEventListener('click', () => handler());",
+      "}",
+      "function detach(btn, handler) {",
+      "  btn.removeEventListener('click', () => handler());",
+      "}"
+    ],
+    "buggy_line": 5,
+    "explanation": "removeEventListener gets a brand-new arrow function, not the one that was added. Listener is never removed. Save the wrapper reference and pass that."
+  },
+  {
+    "id": "array_includes_object",
+    "language": "javascript",
+    "code": [
+      "function hasUser(list, name) {",
+      "  return list.includes({ name: name });",
+      "}",
+      "// always false"
+    ],
+    "buggy_line": 2,
+    "explanation": "includes uses === for object identity; the literal { name } is a different reference every call. Use .some(u => u.name === name)."
+  },
+  {
+    "id": "py_off_by_one_range",
+    "language": "python",
+    "code": [
+      "def sum_to(n):",
+      "    total = 0",
+      "    for i in range(1, n):",
+      "        total += i",
+      "    return total",
+      "# sum_to(5) returns 10, not 15"
+    ],
+    "buggy_line": 3,
+    "explanation": "range(1, n) stops at n-1. Should be range(1, n + 1) to include n."
+  },
+  {
+    "id": "py_mutable_default",
+    "language": "python",
+    "code": [
+      "def append_item(item, lst=[]):",
+      "    lst.append(item)",
+      "    return lst",
+      "",
+      "append_item('a')",
+      "append_item('b')",
+      "# second call returns ['a', 'b']"
+    ],
+    "buggy_line": 1,
+    "explanation": "Mutable default argument is shared across calls. Use lst=None and assign inside the function."
+  },
+  {
+    "id": "py_indent_else",
+    "language": "python",
+    "code": [
+      "def classify(n):",
+      "    if n > 0:",
+      "        return 'pos'",
+      "    if n < 0:",
+      "        return 'neg'",
+      "    else:",
+      "        return 'zero'",
+      "    return 'unreachable'"
+    ],
+    "buggy_line": 8,
+    "explanation": "Last return is unreachable — every previous branch returns. Not a runtime bug per se but signals a missing case or dead code that hides intent."
+  },
+  {
+    "id": "py_int_div",
+    "language": "python",
+    "code": [
+      "def avg(xs):",
+      "    total = 0",
+      "    for x in xs:",
+      "        total += x",
+      "    return total / len(xs) // 1",
+      "# avg([1,2,3]) returns 2.0 not the expected float"
+    ],
+    "buggy_line": 5,
+    "explanation": "// is floor division. The expression collapses the average to an integer-like float. Should be just total / len(xs)."
+  },
+  {
+    "id": "py_modify_during_iter",
+    "language": "python",
+    "code": [
+      "def drop_negatives(xs):",
+      "    for x in xs:",
+      "        if x < 0:",
+      "            xs.remove(x)",
+      "    return xs",
+      "# drop_negatives([1,-2,-3,4]) returns [1,-3,4]"
+    ],
+    "buggy_line": 4,
+    "explanation": "Removing from a list while iterating it skips the next element. Iterate over a copy or use a comprehension."
+  },
+  {
+    "id": "py_is_vs_eq",
+    "language": "python",
+    "code": [
+      "def is_default(x):",
+      "    if x is 1000:",
+      "        return True",
+      "    return False",
+      "# fragile: depends on int caching"
+    ],
+    "buggy_line": 2,
+    "explanation": "is checks identity, not equality. CPython caches small ints so x is 1 may work but x is 1000 is implementation-defined. Use ==."
+  },
+  {
+    "id": "py_dict_get_default",
+    "language": "python",
+    "code": [
+      "def increment_count(d, key):",
+      "    if key not in d:",
+      "        d[key] = 0",
+      "    d[key] + 1",
+      "    return d",
+      "# count never increases"
+    ],
+    "buggy_line": 4,
+    "explanation": "Computes d[key] + 1 but discards the result. Should be d[key] += 1 (or d[key] = d[key] + 1)."
+  },
+  {
+    "id": "sql_count_null",
+    "language": "sql",
+    "code": [
+      "select count(email) as users",
+      "from accounts",
+      "where created_at > now() - interval '7 days';",
+      "-- under-counts users without email"
+    ],
+    "buggy_line": 1,
+    "explanation": "count(column) ignores NULL values. To count rows use count(*)."
+  },
+  {
+    "id": "sql_join_outer_filter",
+    "language": "sql",
+    "code": [
+      "select u.id, p.title",
+      "from users u",
+      "left join posts p on p.user_id = u.id",
+      "where p.published = true;",
+      "-- silently turns the outer join into an inner join"
+    ],
+    "buggy_line": 4,
+    "explanation": "Filtering on the right side of a LEFT JOIN in WHERE drops the outer rows. Move the predicate into the ON clause."
+  },
+  {
+    "id": "regex_dot_unescaped",
+    "language": "javascript",
+    "code": [
+      "function isImage(name) {",
+      "  return /.png|.jpg/.test(name);",
+      "}",
+      "// isImage('script.png_evil') returns true"
+    ],
+    "buggy_line": 2,
+    "explanation": "Unescaped . matches any character; missing anchors mean partial matches succeed. Use /\\.(png|jpg)$/i."
+  },
+  {
+    "id": "shallow_clone_nested",
+    "language": "javascript",
+    "code": [
+      "function setNick(user, nick) {",
+      "  const copy = { ...user };",
+      "  copy.profile.nickname = nick;",
+      "  return copy;",
+      "}",
+      "// mutates original user.profile too"
+    ],
+    "buggy_line": 3,
+    "explanation": "Spread is shallow — copy.profile is still the same object as user.profile. Mutating it leaks. Use structuredClone or rebuild profile explicitly."
+  },
+  {
+    "id": "race_condition_check_act",
+    "language": "javascript",
+    "code": [
+      "async function ensureRow(id) {",
+      "  const exists = await db.has(id);",
+      "  if (!exists) {",
+      "    await db.insert({ id });",
+      "  }",
+      "  return id;",
+      "}"
+    ],
+    "buggy_line": 4,
+    "explanation": "Classic check-then-act race: two concurrent calls can both pass the has check and both insert. Use upsert or unique-constraint + catch."
+  },
+  {
+    "id": "boolean_default_or",
+    "language": "javascript",
+    "code": [
+      "function configure(opts) {",
+      "  const debug = opts.debug || true;",
+      "  if (debug) {",
+      "    console.log('starting');",
+      "  }",
+      "}",
+      "// debug can never be false"
+    ],
+    "buggy_line": 2,
+    "explanation": "opts.debug || true defaults to true even when the caller explicitly passed false. Use opts.debug ?? true (nullish coalescing)."
+  }
+]

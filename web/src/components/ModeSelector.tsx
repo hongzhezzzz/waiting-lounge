@@ -10,7 +10,7 @@ export function ModeSelector({
   onChange: (m: string) => void;
 }) {
   return (
-    <div className="grid sm:grid-cols-3 gap-3">
+    <div className="grid sm:grid-cols-2 gap-3">
       {MODES.map((m) => (
         <button
           key={m.id}
