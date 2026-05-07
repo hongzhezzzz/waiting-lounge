@@ -3,7 +3,7 @@
 The truth about what currently works — not what is planned. Updated whenever a phase or feature changes state.
 
 ## Current phase
-**Phase 14a — daily refill, leaderboard, and game history shipped.** Phases 11–13 are live (auth, Spot the Bug, Brain Bet with 6 round types). Working through the remaining Phase 14 polish (chat-while-gaming, Stock Direction, invite-from-lounge) and the engineering-rigor commitments (`docs/engineering-lessons.md`, pre-flight checklist, review-existing-code routine).
+**Phase 14 complete — all roadmap features shipped.** Phases 11–13 (auth + Spot the Bug + Brain Bet with 6 round types) plus Phase 14a (daily refill / leaderboard / game history), 14b (chat-while-gaming), 14c (Stock Direction — 7th Brain Bet round type), 14d (invite-from-lounge). Pixel Reveal is the only deferred feature.
 
 ## What works
 - Phase 1 hook fires live from a real Claude Code session and writes sanitized events to `~/.waiting-lounge.log`.

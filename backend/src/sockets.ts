@@ -12,12 +12,14 @@ import {
   getLastStatus,
   games,
   roomGame,
+  invites,
   type UserInfo,
   type Room,
   type Game,
   type GameDuration,
   type GameType,
   type GamePlayer,
+  type Invite,
 } from "./state.js";
 import { verifySupabaseJwt } from "./auth/supabase.js";
 import { getOrCreateUser, getBalance } from "./auth/userStore.js";
@@ -28,6 +30,7 @@ const MAX_MESSAGE_LEN = 500;
 const DEVICE_ID_PATTERN = /^[a-f0-9-]{8,64}$/i;
 const ALLOWED_GAME_TYPES: ReadonlyArray<GameType> = ["spot_the_bug", "brain_bet"];
 const ALLOWED_DURATIONS: ReadonlyArray<GameDuration> = [1, 5, 10];
+const INVITE_TTL_MS = 30_000;
 
 // Game-mode queue: per (gameType, durationMin, ante) tuple.
 const gameQueues = new Map<string, string[]>();
@@ -44,6 +47,123 @@ function removeFromGameQueues(socketId: string) {
     const i = q.indexOf(socketId);
     if (i >= 0) q.splice(i, 1);
     if (q.length === 0) gameQueues.delete(key);
+  }
+}
+
+// Idle = signed-in user, not in any room. We don't filter out users currently
+// in a queue — accepting an invite will pull them out. Dedupes by userId so
+// one user opening multiple tabs shows only once.
+function getIdleUsers(excludeSocketId?: string, excludeUserId?: string) {
+  const seen = new Map<string, { handle: string; userId: string; socketId: string }>();
+  for (const [socketId, info] of users) {
+    if (!info.userId) continue;
+    if (info.roomId) continue;
+    if (excludeSocketId && socketId === excludeSocketId) continue;
+    if (excludeUserId && info.userId === excludeUserId) continue;
+    if (seen.has(info.userId)) continue;
+    seen.set(info.userId, { handle: info.handle, userId: info.userId, socketId });
+  }
+  return Array.from(seen.values());
+}
+
+// Drives the actual game start once two specific socket ids are committed
+// to playing each other. Used by both queue_for_game and accept_invite.
+// Returns true on success, false if anything went wrong (caller emits
+// the error).
+async function startGameBetween(
+  io: Server,
+  aSocketId: string,
+  bSocketId: string,
+  gameType: GameType,
+  durationMin: GameDuration,
+  ante: number,
+): Promise<boolean> {
+  const a = users.get(aSocketId);
+  const b = users.get(bSocketId);
+  if (!a || !b || !a.userId || !b.userId) return false;
+  if (a.userId === b.userId) return false;
+  if (a.roomId || b.roomId) return false;
+
+  // Pull both out of any chat/game queues they may be in.
+  removeFromAllQueues(aSocketId);
+  removeFromAllQueues(bSocketId);
+  removeFromGameQueues(aSocketId);
+  removeFromGameQueues(bSocketId);
+
+  let charge;
+  try {
+    charge = await chargeAntes({
+      gameType,
+      durationMin,
+      ante,
+      playerAId: a.userId,
+      playerBId: b.userId,
+    });
+  } catch (err) {
+    log("charge_antes_failed", { reason: (err as Error).message });
+    io.to(aSocketId).emit("error_message", { message: "Could not start game (insufficient points)." });
+    io.to(bSocketId).emit("error_message", { message: "Could not start game (insufficient points)." });
+    return false;
+  }
+
+  const roomId = uuid();
+  const players: GamePlayer[] = [
+    { socketId: aSocketId, userId: a.userId, handle: a.handle, score: 0, disconnectedAt: null },
+    { socketId: bSocketId, userId: b.userId, handle: b.handle, score: 0, disconnectedAt: null },
+  ];
+  const game: Game = {
+    id: uuid(),
+    type: gameType,
+    roomId,
+    players,
+    pot: ante * 2,
+    ante,
+    durationMin,
+    startedAt: Date.now(),
+    endsAt: Date.now() + durationMin * 60_000,
+    state: null,
+    pendingRefundIds: charge.pendingRefundIds,
+    resolved: false,
+  };
+  (game as Game & { gameRoundId?: string }).gameRoundId = charge.gameRoundId;
+  games.set(game.id, game);
+  roomGame.set(roomId, game.id);
+
+  a.roomId = roomId;
+  b.roomId = roomId;
+  io.sockets.sockets.get(aSocketId)?.join(roomId);
+  io.sockets.sockets.get(bSocketId)?.join(roomId);
+
+  const runner = buildRunner(game, io);
+  liveRunners.set(game.id, runner);
+
+  io.to(aSocketId).emit("game_started", { gameId: game.id, roomId, gameType, durationMin, ante, peerHandle: b.handle });
+  io.to(bSocketId).emit("game_started", { gameId: game.id, roomId, gameType, durationMin, ante, peerHandle: a.handle });
+  log("game_started", { gameId: game.id, type: gameType, ante, players: [a.handle, b.handle] });
+
+  runner.start();
+  return true;
+}
+
+function cancelInvite(io: Server, inviteId: string, reason: "expired" | "cancelled" | "declined" | "consumed") {
+  const inv = invites.get(inviteId);
+  if (!inv) return;
+  if (inv.expiryTimer) clearTimeout(inv.expiryTimer);
+  invites.delete(inviteId);
+  if (reason === "expired") {
+    io.to(inv.inviterSocketId).emit("invite_expired", { inviteId, reason });
+    io.to(inv.targetSocketId).emit("invite_expired", { inviteId, reason });
+  } else if (reason === "declined") {
+    io.to(inv.inviterSocketId).emit("invite_declined", { inviteId });
+  }
+}
+
+// On disconnect, kill any invite either side of which involves the dropped socket.
+function cleanupInvitesForSocket(io: Server, socketId: string) {
+  for (const inv of Array.from(invites.values())) {
+    if (inv.inviterSocketId === socketId || inv.targetSocketId === socketId) {
+      cancelInvite(io, inv.id, "expired");
+    }
   }
 }
 
@@ -268,74 +388,116 @@ export function registerSocketHandlers(io: Server) {
       }
 
       const peerId = q.splice(peerIdx, 1)[0];
-      const peer = users.get(peerId);
-      if (!peer || !peer.userId) {
-        // Peer vanished — re-queue self.
+      const ok = await startGameBetween(io, socket.id, peerId, gameType, durationMin, ante);
+      if (!ok) {
+        // Peer vanished or charge failed — re-queue self.
         q.push(socket.id);
-        return socket.emit("game_waiting", { gameType, durationMin, ante });
+        socket.emit("game_waiting", { gameType, durationMin, ante });
       }
-
-      // Match — charge antes, create game, build runner, broadcast game_started.
-      removeFromGameQueues(socket.id);
-
-      let charge;
-      try {
-        charge = await chargeAntes({
-          gameType,
-          durationMin,
-          ante,
-          playerAId: me.userId,
-          playerBId: peer.userId,
-        });
-      } catch (err) {
-        log("charge_antes_failed", { reason: (err as Error).message });
-        socket.emit("error_message", { message: "Could not start game (insufficient points)." });
-        io.to(peerId).emit("error_message", { message: "Could not start game (peer issue)." });
-        return;
-      }
-
-      const roomId = uuid();
-      const players: GamePlayer[] = [
-        { socketId: socket.id, userId: me.userId, handle: me.handle, score: 0, disconnectedAt: null },
-        { socketId: peerId, userId: peer.userId, handle: peer.handle, score: 0, disconnectedAt: null },
-      ];
-      const game: Game = {
-        id: uuid(),
-        type: gameType,
-        roomId,
-        players,
-        pot: ante * 2,
-        ante,
-        durationMin,
-        startedAt: Date.now(),
-        endsAt: Date.now() + durationMin * 60_000,
-        state: null,
-        pendingRefundIds: charge.pendingRefundIds,
-        resolved: false,
-      };
-      // Stash the gameRoundId on the game object so the resolver can use it.
-      (game as Game & { gameRoundId?: string }).gameRoundId = charge.gameRoundId;
-      games.set(game.id, game);
-      roomGame.set(roomId, game.id);
-
-      me.roomId = roomId;
-      peer.roomId = roomId;
-      socket.join(roomId);
-      io.sockets.sockets.get(peerId)?.join(roomId);
-
-      const runner = buildRunner(game, io);
-      liveRunners.set(game.id, runner);
-
-      socket.emit("game_started", { gameId: game.id, roomId, gameType, durationMin, ante, peerHandle: peer.handle });
-      io.to(peerId).emit("game_started", { gameId: game.id, roomId, gameType, durationMin, ante, peerHandle: me.handle });
-      log("game_started", { gameId: game.id, type: gameType, ante, players: [me.handle, peer.handle] });
-
-      runner.start();
     });
 
     socket.on("cancel_game_queue", () => {
       removeFromGameQueues(socket.id);
       socket.emit("game_queue_cancelled", {});
+    });
+
+    socket.on("list_idle_users", () => {
+      const list = getIdleUsers(socket.id, me.userId ?? undefined);
+      socket.emit("idle_users", { users: list });
+    });
+
+    socket.on("invite_to_game", async (payload: { targetSocketId?: string; gameType?: string; durationMin?: number; ante?: number }) => {
+      if (!me.userId) return socket.emit("error_message", { message: "Sign in to invite." });
+      const targetSocketId = (payload?.targetSocketId || "").toString();
+      const gameType = (payload?.gameType || "").toString() as GameType;
+      const durationMin = Number(payload?.durationMin) as GameDuration;
+      const ante = Number(payload?.ante);
+      if (!ALLOWED_GAME_TYPES.includes(gameType)) {
+        return socket.emit("error_message", { message: "Invalid game type." });
+      }
+      if (!ALLOWED_DURATIONS.includes(durationMin)) {
+        return socket.emit("error_message", { message: "Invalid duration." });
+      }
+      if (!Number.isInteger(ante) || ante < 10 || ante > 1000) {
+        return socket.emit("error_message", { message: "Invalid ante." });
+      }
+      const target = users.get(targetSocketId);
+      if (!target || !target.userId) {
+        return socket.emit("error_message", { message: "That user is no longer online." });
+      }
+      if (target.userId === me.userId) {
+        return socket.emit("error_message", { message: "You can't invite yourself." });
+      }
+      if (me.roomId || target.roomId) {
+        return socket.emit("error_message", { message: "One of you is already in a room." });
+      }
+      const balance = await getBalance(me.userId);
+      if (balance == null || balance < ante) {
+        return socket.emit("error_message", { message: `Not enough points (${balance ?? 0} < ${ante}).` });
+      }
+
+      const inviteId = uuid();
+      const invite: Invite = {
+        id: inviteId,
+        inviterSocketId: socket.id,
+        inviterUserId: me.userId,
+        inviterHandle: me.handle,
+        targetSocketId,
+        targetUserId: target.userId,
+        targetHandle: target.handle,
+        gameType,
+        durationMin,
+        ante,
+        createdAt: Date.now(),
+        expiryTimer: null,
+      };
+      invite.expiryTimer = setTimeout(() => cancelInvite(io, inviteId, "expired"), INVITE_TTL_MS);
+      invites.set(inviteId, invite);
+
+      socket.emit("invite_sent", { inviteId, targetHandle: target.handle, expiresAt: Date.now() + INVITE_TTL_MS });
+      io.to(targetSocketId).emit("incoming_invite", {
+        inviteId,
+        inviterHandle: me.handle,
+        gameType,
+        durationMin,
+        ante,
+        expiresAt: Date.now() + INVITE_TTL_MS,
+      });
+      log("invite_sent", { inviteId, from: me.handle, to: target.handle, gameType });
+    });
+
+    socket.on("accept_invite", async (payload: { inviteId?: string }) => {
+      const inviteId = (payload?.inviteId || "").toString();
+      const inv = invites.get(inviteId);
+      if (!inv) return socket.emit("error_message", { message: "Invite no longer available." });
+      if (inv.targetSocketId !== socket.id) {
+        return socket.emit("error_message", { message: "That invite isn't for you." });
+      }
+      // Pull from in-memory before we await — prevents a double-accept.
+      if (inv.expiryTimer) clearTimeout(inv.expiryTimer);
+      invites.delete(inviteId);
+
+      const ok = await startGameBetween(
+        io,
+        inv.inviterSocketId,
+        inv.targetSocketId,
+        inv.gameType as GameType,
+        inv.durationMin,
+        inv.ante,
+      );
+      if (!ok) {
+        socket.emit("error_message", { message: "Could not start game — try again from the lounge." });
+        io.to(inv.inviterSocketId).emit("error_message", { message: "Could not start game — try again from the lounge." });
+      }
+      log("invite_accepted", { inviteId, inviter: inv.inviterHandle, target: inv.targetHandle, ok });
+    });
+
+    socket.on("decline_invite", (payload: { inviteId?: string }) => {
+      const inviteId = (payload?.inviteId || "").toString();
+      const inv = invites.get(inviteId);
+      if (!inv) return;
+      if (inv.targetSocketId !== socket.id) return;
+      cancelInvite(io, inviteId, "declined");
     });
 
     socket.on("game_action", (payload: { gameId?: string; action?: unknown }) => {
@@ -352,6 +514,7 @@ export function registerSocketHandlers(io: Server) {
       removeFromAllQueues(socket.id);
       removeFromGameQueues(socket.id);
       unregisterDeviceSocket(socket.id);
+      cleanupInvitesForSocket(io, socket.id);
 
       // If this socket is in an active game, notify the runner (grace timer).
       if (me.roomId) {

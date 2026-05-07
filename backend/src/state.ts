@@ -73,6 +73,27 @@ export const games = new Map<GameId, Game>();
 // Quick lookup: roomId -> gameId, for the disconnect/leave flow.
 export const roomGame = new Map<RoomId, GameId>();
 
+// Pending invites (Phase 14d). Each entry expires automatically after
+// INVITE_TTL_MS (see sockets.ts). Cleared on accept/decline/expire/
+// disconnect. In-memory by design — a 30 s lifetime survives Render
+// cold-starts implicitly (a sleep wipes them and that's correct: the
+// inviter and invitee can both retry from a fresh /lounge poll).
+export type Invite = {
+  id: string;
+  inviterSocketId: SocketId;
+  inviterUserId: UserId;
+  inviterHandle: string;
+  targetSocketId: SocketId;
+  targetUserId: UserId;
+  targetHandle: string;
+  gameType: string;
+  durationMin: GameDuration;
+  ante: number;
+  createdAt: number;
+  expiryTimer: NodeJS.Timeout | null;
+};
+export const invites = new Map<string, Invite>();
+
 export function getQueue(tag: string): SocketId[] {
   let q = queues.get(tag);
   if (!q) {
