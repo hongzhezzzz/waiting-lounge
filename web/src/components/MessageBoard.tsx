@@ -1,42 +1,116 @@
 "use client";
 
-import { useState } from "react";
-import { FAKE_BOARD, TAGS, type BoardPost } from "@/lib/fakeData";
+import { useCallback, useEffect, useState } from "react";
+import { TAGS } from "@/lib/fakeData";
+import { getBackendUrl } from "@/lib/backend";
 
-export function MessageBoard() {
-  const [posts, setPosts] = useState<BoardPost[]>(FAKE_BOARD);
-  const [filter, setFilter] = useState<string>("All");
+type ApiPost = {
+  id: string;
+  handle: string;
+  tag: string;
+  body: string;
+  createdAt: number;
+  expiresAt: number;
+  reportCount: number;
+};
+
+function minutesAgo(ts: number) {
+  const m = Math.floor((Date.now() - ts) / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ago`;
+}
+
+export function MessageBoard({ initialTag }: { initialTag?: string }) {
+  const [posts, setPosts] = useState<ApiPost[]>([]);
+  const [filter, setFilter] = useState<string>(initialTag && (TAGS as readonly string[]).includes(initialTag) ? initialTag : "All");
   const [body, setBody] = useState("");
-  const [tag, setTag] = useState<string>("Debugging");
+  const [tag, setTag] = useState<string>(
+    initialTag && (TAGS as readonly string[]).includes(initialTag) ? initialTag : "Debugging",
+  );
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const visible = filter === "All" ? posts : posts.filter((p) => p.tag === filter);
+  const fetchPosts = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const url = new URL("/api/board", getBackendUrl());
+      if (filter !== "All") url.searchParams.set("tag", filter);
+      const res = await fetch(url.toString(), { cache: "no-store" });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const data = (await res.json()) as { posts: ApiPost[] };
+      setPosts(data.posts || []);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not load posts.");
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
 
-  function submit(e: React.FormEvent) {
+  useEffect(() => {
+    fetchPosts();
+  }, [fetchPosts]);
+
+  // Light auto-refresh so cross-window posts appear without a manual reload.
+  useEffect(() => {
+    const id = setInterval(fetchPosts, 8_000);
+    return () => clearInterval(id);
+  }, [fetchPosts]);
+
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!body.trim()) return;
-    setPosts((p) => [
-      {
-        id: crypto.randomUUID(),
-        handle: "you",
-        tag,
-        body,
-        minutesAgo: 0,
-      },
-      ...p,
-    ]);
-    setBody("");
+    setSubmitting(true);
+    setErr(null);
+    try {
+      const res = await fetch(new URL("/api/board", getBackendUrl()).toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag, body }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || `Server returned ${res.status}`);
+      }
+      const data = (await res.json()) as { post: ApiPost };
+      setPosts((p) => [data.post, ...p]);
+      setBody("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not post.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function hide(id: string) {
-    setPosts((p) => p.filter((x) => x.id !== id));
+  async function report(id: string) {
+    setHidden((s) => {
+      const next = new Set(s);
+      next.add(id);
+      return next;
+    });
+    try {
+      await fetch(new URL("/api/board/report", getBackendUrl()).toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    } catch {
+      // best-effort; client-side hide stays
+    }
   }
+
+  const visible = posts.filter((p) => !hidden.has(p.id));
 
   return (
     <div className="space-y-6">
       <form onSubmit={submit} className="card p-5 space-y-3">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted">Posting as</span>
-          <span className="font-mono text-ink">you</span>
+          <span className="font-mono text-ink">anonymous</span>
           <span className="text-muted">in</span>
           <select
             value={tag}
@@ -58,8 +132,8 @@ export function MessageBoard() {
         />
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted">{body.length}/500</span>
-          <button type="submit" className="btn-primary text-sm py-2">
-            Post
+          <button type="submit" className="btn-primary text-sm py-2 disabled:opacity-50" disabled={submitting || !body.trim()}>
+            {submitting ? "Posting…" : "Post"}
           </button>
         </div>
       </form>
@@ -77,20 +151,26 @@ export function MessageBoard() {
         ))}
       </div>
 
+      {err && <div className="text-sm text-amber">{err}</div>}
+
       <ul className="space-y-3">
-        {visible.length === 0 && (
-          <li className="text-sm text-muted text-center py-10">No posts yet for {filter}.</li>
+        {loading && posts.length === 0 && (
+          <li className="text-sm text-muted text-center py-10">Loading posts…</li>
+        )}
+        {!loading && visible.length === 0 && (
+          <li className="text-sm text-muted text-center py-10">
+            No posts yet for {filter}. Be the first.
+          </li>
         )}
         {visible.map((p) => (
           <li key={p.id} className="card p-4">
             <div className="flex items-center justify-between text-xs text-muted mb-2">
               <span>
                 <span className="font-mono text-ink">{p.handle}</span> · {p.tag}
-                {p.mood && <> · {p.mood}</>}
               </span>
               <span>
-                {p.minutesAgo === 0 ? "just now" : `${p.minutesAgo}m ago`} ·{" "}
-                <button onClick={() => hide(p.id)} className="hover:text-ink">
+                {minutesAgo(p.createdAt)} ·{" "}
+                <button onClick={() => report(p.id)} className="hover:text-ink">
                   Report
                 </button>
               </span>

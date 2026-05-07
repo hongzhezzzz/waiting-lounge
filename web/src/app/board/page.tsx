@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { MessageBoard } from "@/components/MessageBoard";
 import { ClaudeNeedsYouOverlay } from "@/components/ClaudeNeedsYouOverlay";
 import { AgentStatusBadge, type AgentStatus } from "@/components/AgentStatusBadge";
 
-export default function BoardPage() {
+function BoardPageInner() {
+  const params = useSearchParams();
+  const initialTag = params.get("tag") || undefined;
   const [alertOpen, setAlertOpen] = useState(false);
   const [status, setStatus] = useState<AgentStatus>("waiting");
 
@@ -25,7 +28,7 @@ export default function BoardPage() {
         <AgentStatusBadge status={status} />
       </div>
 
-      <MessageBoard />
+      <MessageBoard initialTag={initialTag} />
 
       <button
         onClick={() => {
@@ -46,5 +49,13 @@ export default function BoardPage() {
         onSnooze={() => setAlertOpen(false)}
       />
     </div>
+  );
+}
+
+export default function BoardPage() {
+  return (
+    <Suspense fallback={<div className="max-w-3xl mx-auto px-6 py-12 text-muted">Loading…</div>}>
+      <BoardPageInner />
+    </Suspense>
   );
 }

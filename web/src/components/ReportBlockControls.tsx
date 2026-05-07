@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-export function ReportBlockControls() {
+export function ReportBlockControls({ onNewMatch }: { onNewMatch?: () => void }) {
   return (
     <div className="flex items-center gap-2 text-xs">
       <button
@@ -21,9 +21,15 @@ export function ReportBlockControls() {
         Block
       </button>
       <span className="text-line">·</span>
-      <Link href="/join" className="text-muted hover:text-ink">
-        New match
-      </Link>
+      {onNewMatch ? (
+        <button type="button" onClick={onNewMatch} className="text-muted hover:text-ink">
+          New match
+        </button>
+      ) : (
+        <Link href="/join" className="text-muted hover:text-ink">
+          New match
+        </Link>
+      )}
       <span className="text-line">·</span>
       <Link href="/" className="text-muted hover:text-ink">
         Leave

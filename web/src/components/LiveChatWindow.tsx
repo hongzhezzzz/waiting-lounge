@@ -13,7 +13,7 @@ type Message = {
   ts: number;
 };
 
-type Phase = "connecting" | "waiting" | "matched" | "peer_left" | "error";
+type Phase = "connecting" | "waiting" | "matched" | "peer_left";
 
 function timeShort(ts: number) {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -26,22 +26,19 @@ export function LiveChatWindow({ tag }: { tag: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [searchNonce, setSearchNonce] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const joinedRef = useRef(false);
 
   useEffect(() => {
     const socket = getSocket();
-
-    function tryJoin() {
-      if (joinedRef.current) return;
-      joinedRef.current = true;
-      setPhase("waiting");
-      socket.emit("join_queue", { tag });
-    }
+    setPhase("connecting");
+    setMessages([]);
+    setPeerHandle("");
+    setErrMsg(null);
 
     function onWelcome(p: { handle: string }) {
       setMyHandle(p.handle);
-      tryJoin();
+      socket.emit("join_queue", { tag });
     }
     function onWaiting() {
       setPhase("waiting");
@@ -69,12 +66,7 @@ export function LiveChatWindow({ tag }: { tag: string }) {
       setPhase("peer_left");
       setMessages((m) => [
         ...m,
-        {
-          id: "system-peer-left",
-          from: "system",
-          body: "Your peer left.",
-          ts: Date.now(),
-        },
+        { id: "system-peer-left", from: "system", body: "Your peer left.", ts: Date.now() },
       ]);
     }
     function onErrorMessage(p: { message: string }) {
@@ -89,9 +81,10 @@ export function LiveChatWindow({ tag }: { tag: string }) {
     socket.on("error_message", onErrorMessage);
 
     if (socket.connected) {
-      // Already connected before we mounted: server already sent welcome.
-      // But if we never got it, force a join attempt anyway.
-      tryJoin();
+      // We re-join here on every effect run. The server idempotently removes
+      // us from any prior queue first, so this is safe to call repeatedly.
+      socket.emit("join_queue", { tag });
+      setPhase("waiting");
     }
 
     return () => {
@@ -104,7 +97,7 @@ export function LiveChatWindow({ tag }: { tag: string }) {
       socket.emit("leave_room");
       socket.emit("leave_queue");
     };
-  }, [tag]);
+  }, [tag, searchNonce]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -118,7 +111,9 @@ export function LiveChatWindow({ tag }: { tag: string }) {
     setDraft("");
   }
 
-  // ----- render branches -----
+  function findNewMatch() {
+    setSearchNonce((n) => n + 1);
+  }
 
   if (phase === "connecting" || phase === "waiting") {
     return (
@@ -153,9 +148,9 @@ export function LiveChatWindow({ tag }: { tag: string }) {
           Conversations don&apos;t persist. That&apos;s the deal.
         </div>
         <div className="flex gap-2 justify-center pt-2">
-          <Link href={`/chat?tag=${encodeURIComponent(tag)}`} className="btn-primary">
+          <button onClick={findNewMatch} className="btn-primary">
             Find a new match
-          </Link>
+          </button>
           <Link href="/board" className="btn-secondary">
             Go to board
           </Link>
@@ -164,7 +159,6 @@ export function LiveChatWindow({ tag }: { tag: string }) {
     );
   }
 
-  // phase === "matched"
   return (
     <div className="card flex flex-col h-[70vh]">
       <div className="flex items-center justify-between px-5 py-3 border-b border-line">
@@ -179,7 +173,7 @@ export function LiveChatWindow({ tag }: { tag: string }) {
             </div>
           </div>
         </div>
-        <ReportBlockControls />
+        <ReportBlockControls onNewMatch={findNewMatch} />
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
