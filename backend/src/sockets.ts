@@ -117,7 +117,7 @@ export function registerSocketHandlers(io: Server) {
       }
     }
 
-    socket.on("register_device", (payload: { deviceId?: string }) => {
+    socket.on("register_device", async (payload: { deviceId?: string }) => {
       const deviceId = (payload?.deviceId || "").toString().trim();
       if (!DEVICE_ID_PATTERN.test(deviceId)) {
         return socket.emit("error_message", { message: "Invalid device id." });
@@ -126,7 +126,7 @@ export function registerSocketHandlers(io: Server) {
       registerDeviceSocket(deviceId, socket.id);
       log("device_registered", { socketId: socket.id, deviceId: deviceId.slice(0, 8) });
 
-      const last = getLastStatus(deviceId);
+      const last = await getLastStatus(deviceId);
       if (last) {
         socket.emit("agent_status_update", {
           status: last.status,

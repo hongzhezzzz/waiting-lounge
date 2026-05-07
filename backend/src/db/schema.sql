@@ -90,3 +90,13 @@ create table if not exists pending_refunds (
 create index if not exists pending_refunds_unprocessed_idx
   on pending_refunds (created_at)
   where processed_at is null;
+
+-- Survives backend cold-starts so the lounge badge can still show the right
+-- state when a friend opens the tab after Render's free-tier dyno slept.
+create table if not exists device_last_status (
+  device_id   text primary key,
+  status      text not null,
+  client      text not null,
+  ts_ms       bigint not null,
+  updated_at  timestamptz not null default now()
+);

@@ -145,12 +145,21 @@ export default function GameRoomPage() {
   if (loading) return <div className="max-w-3xl mx-auto px-6 py-12 text-muted">Loading…</div>;
 
   if (aborted) {
+    const peerLeft = aborted === "user_requeued";
     return (
       <div className="max-w-2xl mx-auto px-6 py-12 space-y-4">
-        <h1 className="text-2xl font-medium text-ink">Game ended unexpectedly</h1>
-        <p className="text-muted">Reason: <span className="font-mono">{aborted}</span></p>
-        <p className="text-sm text-muted">If your ante was deducted, it&apos;s automatically refunded on the next backend restart.</p>
-        <button onClick={() => router.push("/me")} className="btn-secondary">Back to profile</button>
+        <h1 className="text-2xl font-medium text-ink">
+          {peerLeft ? "Your opponent left." : "Game ended unexpectedly"}
+        </h1>
+        <p className="text-muted">
+          {peerLeft
+            ? "Both antes have been refunded. Find a new match below."
+            : <>Reason: <span className="font-mono">{aborted}</span>. Any ante is refunded automatically — refresh the page to see the latest balance.</>}
+        </p>
+        <div className="flex gap-2">
+          <button onClick={() => router.push("/join")} className="btn-primary">Find a new match</button>
+          <button onClick={() => router.push("/me")} className="btn-secondary">Profile</button>
+        </div>
       </div>
     );
   }
