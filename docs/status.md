@@ -50,5 +50,19 @@ Local MVP is complete. Beyond this, everything needs accounts/infra:
 - **Phase 9:** CLI installer (`waiting-lounge install|status|test|uninstall`).
 - **Phase 10:** small beta with 3-5 trusted users.
 
+## Deployment in flight (2026-05-06 evening)
+
+Public deploy is mostly wired. Currently **one CORS env var away** from working end-to-end:
+- **Frontend:** `https://waiting-lounge.vercel.app` (Vercel, auto-deploys from `main`)
+- **Backend:** `https://waiting-lounge.onrender.com` (Render web service, auto-deploys on push)
+- **Database:** Supabase Postgres (`aws-1-us-west-2.pooler.supabase.com`), pooler connection
+- **Local hook:** points at Render via `~/.waiting-lounge/backend_url`
+
+Pending step: update Render's `ALLOWED_ORIGINS` env var from `http://localhost:3000` to `http://localhost:3000,https://waiting-lounge.vercel.app` so the browser can talk to the backend. User chose to install Render's official MCP server (`https://mcp.render.com/mcp`, project scope) instead of clicking through the Render UI. After Claude Code restart, the next session should:
+1. Use the Render MCP `update_env_vars` (or equivalent) tool to set `ALLOWED_ORIGINS` on the `waiting-lounge-backend` service to the comma-separated value above.
+2. Wait for Render to redeploy.
+3. Walk the user through pairing on the Vercel URL: `https://waiting-lounge.vercel.app/pair?d=<their device id from ~/.waiting-lounge/device_id>` and verifying the badge updates from real Claude Code activity.
+4. Then proceed to **Phase 9: CLI installer**.
+
 ## Last updated
 2026-05-06
