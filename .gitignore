@@ -19,3 +19,4 @@ out/
 .dropbox.attr
 
 .claude/settings.local.json
+.mcp.json

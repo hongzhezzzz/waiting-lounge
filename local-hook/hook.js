@@ -80,8 +80,7 @@ function finish() {
     timestamp: Date.now(),
   };
 
-  const backendUrl =
-    process.env.WAITING_LOUNGE_BACKEND || "http://localhost:4000";
+  const backendUrl = readBackendUrl();
   postJson(`${backendUrl}/api/agent-event`, payload, () => process.exit(0));
 }
 
@@ -98,6 +97,24 @@ function getOrCreateDeviceId() {
     // Fall back to an in-memory id so we never crash the hook.
     return crypto.randomUUID();
   }
+}
+
+function readBackendUrl() {
+  // Resolution order:
+  //   1. WAITING_LOUNGE_BACKEND env var (override for one-off runs)
+  //   2. ~/.waiting-lounge/backend_url file (persistent setting)
+  //   3. http://localhost:4000 (local dev fallback)
+  if (process.env.WAITING_LOUNGE_BACKEND) {
+    return process.env.WAITING_LOUNGE_BACKEND.trim();
+  }
+  try {
+    const file = path.join(os.homedir(), ".waiting-lounge", "backend_url");
+    if (fs.existsSync(file)) {
+      const v = fs.readFileSync(file, "utf8").trim();
+      if (v) return v;
+    }
+  } catch {}
+  return "http://localhost:4000";
 }
 
 function postJson(urlString, data, done) {
