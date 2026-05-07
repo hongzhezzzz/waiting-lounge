@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import type { Server } from "socket.io";
-import { getSocketsForDevice } from "../state.js";
+import { getSocketsForDevice, setLastStatus } from "../state.js";
 
 // PRIVACY INVARIANT — see docs/decisions.md.
 // This route accepts EXACTLY four fields and rejects payloads with any other
@@ -41,6 +41,8 @@ export function createAgentEventRouter(io: Server): Router {
     if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
       return res.status(400).json({ error: "Bad timestamp." });
     }
+
+    setLastStatus(anonymousDeviceId, { status, client, timestamp });
 
     const ids = getSocketsForDevice(anonymousDeviceId);
     for (const sid of ids) {

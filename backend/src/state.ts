@@ -22,10 +22,17 @@ export type Room = {
   createdAt: number;
 };
 
+export type LastAgentStatus = {
+  status: string;
+  client: string;
+  timestamp: number;
+};
+
 export const users = new Map<SocketId, UserInfo>();
 export const queues = new Map<string, SocketId[]>();
 export const rooms = new Map<RoomId, Room>();
 export const deviceSockets = new Map<DeviceId, Set<SocketId>>();
+export const deviceLastStatus = new Map<DeviceId, LastAgentStatus>();
 
 export function getQueue(tag: string): SocketId[] {
   let q = queues.get(tag);
@@ -71,4 +78,12 @@ export function getSocketsForDevice(deviceId: DeviceId): SocketId[] {
   const set = deviceSockets.get(deviceId);
   if (!set) return [];
   return Array.from(set);
+}
+
+export function setLastStatus(deviceId: DeviceId, status: LastAgentStatus) {
+  deviceLastStatus.set(deviceId, status);
+}
+
+export function getLastStatus(deviceId: DeviceId): LastAgentStatus | undefined {
+  return deviceLastStatus.get(deviceId);
 }

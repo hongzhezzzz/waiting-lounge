@@ -9,6 +9,7 @@ import {
   removeFromAllQueues,
   registerDeviceSocket,
   unregisterDeviceSocket,
+  getLastStatus,
   type UserInfo,
   type Room,
 } from "./state.js";
@@ -40,6 +41,15 @@ export function registerSocketHandlers(io: Server) {
       me.deviceId = deviceId;
       registerDeviceSocket(deviceId, socket.id);
       log("device_registered", { socketId: socket.id, deviceId: deviceId.slice(0, 8) });
+
+      const last = getLastStatus(deviceId);
+      if (last) {
+        socket.emit("agent_status_update", {
+          status: last.status,
+          client: last.client,
+          ts: last.timestamp,
+        });
+      }
     });
 
     socket.on("join_queue", (payload: { tag?: string }) => {
