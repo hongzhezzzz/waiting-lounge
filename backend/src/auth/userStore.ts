@@ -3,8 +3,12 @@
 // per row keeps us decoupled from Supabase auth.users in case we migrate
 // auth providers later.
 
-import { query } from "../db/index.js";
+import { getPool, query } from "../db/index.js";
 import { generateHandle } from "../lib/identity.js";
+
+const REFILL_CAP = 1000;
+const REFILL_AMOUNT = 100;
+const REFILL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 export type AppUser = {
   id: string;
@@ -75,4 +79,64 @@ export async function getDeviceBinding(deviceId: string): Promise<string | null>
     [deviceId],
   );
   return r.rows[0]?.user_id ?? null;
+}
+
+// Lazy daily refill — adds up to 100 pts (capped at 1000) once every 24 h.
+// Returns the amount actually credited (0 if the user is not yet eligible).
+//
+// Called only from /api/me — never from the socket middleware. Keeps the
+// "first call sees refilledAmount > 0, second call sees 0" race away from
+// any path other than the one that surfaces the toast.
+//
+// Atomic: SELECT ... FOR UPDATE on the user row, re-checks eligibility
+// inside the lock before mutating, writes a point_transactions row.
+export async function applyDailyRefill(userId: string): Promise<number> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+
+    const lock = await client.query<{ points: number; last_refill_at: string | null }>(
+      `select points, last_refill_at from users where id = $1 for update`,
+      [userId],
+    );
+    const row = lock.rows[0];
+    if (!row) {
+      await client.query("commit");
+      return 0;
+    }
+    if (!eligibleForRefill(row.last_refill_at, row.points)) {
+      await client.query("commit");
+      return 0;
+    }
+
+    const amount = Math.min(REFILL_AMOUNT, REFILL_CAP - row.points);
+    if (amount <= 0) {
+      await client.query("commit");
+      return 0;
+    }
+
+    await client.query(
+      `update users set points = points + $1, last_refill_at = now() where id = $2`,
+      [amount, userId],
+    );
+    await client.query(
+      `insert into point_transactions (user_id, delta, reason) values ($1, $2, 'daily_refill')`,
+      [userId, amount],
+    );
+
+    await client.query("commit");
+    return amount;
+  } catch (err) {
+    await client.query("rollback");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+function eligibleForRefill(lastRefillAt: string | null, points: number): boolean {
+  if (points >= REFILL_CAP) return false;
+  if (lastRefillAt == null) return true;
+  const ageMs = Date.now() - new Date(lastRefillAt).getTime();
+  return ageMs >= REFILL_COOLDOWN_MS;
 }

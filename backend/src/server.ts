@@ -12,6 +12,7 @@ import { createAgentEventRouter } from "./routes/agentEvent.js";
 import { applySchema, pingDb, query } from "./db/index.js";
 import { processStalePendingRefunds } from "./games/transferPoints.js";
 import { createMeRouter } from "./routes/me.js";
+import { createLeaderboardRouter } from "./routes/leaderboard.js";
 // Importing games/index registers all game types into the runner registry.
 import "./games/index.js";
 
@@ -32,6 +33,7 @@ app.get("/health", async (_req, res) => {
 
 app.use("/api/board", createBoardRouter());
 app.use("/api/me", createMeRouter());
+app.use("/api/leaderboard", createLeaderboardRouter());
 
 const server = http.createServer(app);
 const io = new Server(server, {

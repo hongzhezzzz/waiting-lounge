@@ -3,9 +3,7 @@
 The truth about what currently works — not what is planned. Updated whenever a phase or feature changes state.
 
 ## Current phase
-**Phase 11 — code complete locally.** Auth + points + the first competitive game are wired end-to-end. Pending production deploy until the user supplies Supabase Auth keys and enables email OTP in the Supabase dashboard (see "What's blocked" below).
-
-Pilot (Phase 10) concluded — moving on. Next stage is the competitive-games arc (11→14, see plan in `~/.claude/plans/magical-frolicking-glade.md`).
+**Phase 14a — daily refill, leaderboard, and game history shipped.** Phases 11–13 are live (auth, Spot the Bug, Brain Bet with 6 round types). Working through the remaining Phase 14 polish (chat-while-gaming, Stock Direction, invite-from-lounge) and the engineering-rigor commitments (`docs/engineering-lessons.md`, pre-flight checklist, review-existing-code routine).
 
 ## What works
 - Phase 1 hook fires live from a real Claude Code session and writes sanitized events to `~/.waiting-lounge.log`.
