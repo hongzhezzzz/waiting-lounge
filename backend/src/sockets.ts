@@ -47,6 +47,20 @@ function removeFromGameQueues(socketId: string) {
   }
 }
 
+// Cleans up whatever room the user is currently in, so a fresh queue request
+// can proceed. Chat room → leave + notify peer. Game room → abort the game
+// (refund both antes — see resolver.abort). No-op if not in a room.
+async function cleanupCurrentRoom(socket: Socket, me: UserInfo) {
+  if (!me.roomId) return;
+  const gameId = roomGame.get(me.roomId);
+  if (gameId) {
+    const runner = getRunner(gameId);
+    if (runner) await runner.abort("user_requeued");
+  }
+  // Always clear chat-room state too (works whether the room was chat or game).
+  if (me.roomId) leaveRoomBySocket(socket, me, "left");
+}
+
 export function registerSocketHandlers(io: Server) {
   // Optional JWT auth: if a token is present and valid, attach userId/email
   // to socket.data. Anonymous connections still work for chat/board/lounge.
@@ -122,10 +136,13 @@ export function registerSocketHandlers(io: Server) {
       }
     });
 
-    socket.on("join_queue", (payload: { tag?: string }) => {
+    socket.on("join_queue", async (payload: { tag?: string }) => {
       const tag = (payload?.tag || "").toString().trim();
       if (!tag) return socket.emit("error_message", { message: "Missing tag." });
-      if (me.roomId) return socket.emit("error_message", { message: "Already in a room." });
+
+      // Lenient: if the user navigated away from a previous chat/game without
+      // cleaning up, reset state instead of blocking.
+      if (me.roomId) await cleanupCurrentRoom(socket, me);
 
       removeFromAllQueues(socket.id);
       me.tag = tag;
@@ -222,9 +239,9 @@ export function registerSocketHandlers(io: Server) {
       if (!Number.isInteger(ante) || ante < 10 || ante > 1000) {
         return socket.emit("error_message", { message: "Invalid ante." });
       }
-      if (me.roomId) {
-        return socket.emit("error_message", { message: "Already in a room." });
-      }
+
+      // Lenient cleanup, same as join_queue.
+      if (me.roomId) await cleanupCurrentRoom(socket, me);
 
       const balance = await getBalance(me.userId);
       if (balance == null || balance < ante) {
@@ -353,6 +370,11 @@ export function registerSocketHandlers(io: Server) {
       log("disconnected", { socketId: socket.id, handle });
     });
   });
+}
+
+// Wrapper that lets the helper above use leaveRoom without a forward-ref dance.
+function leaveRoomBySocket(socket: Socket, me: UserInfo, reason: "left" | "disconnected") {
+  return leaveRoom(socket, me, reason);
 }
 
 function leaveRoom(socket: Socket, me: UserInfo, reason: "left" | "disconnected") {

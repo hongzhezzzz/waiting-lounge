@@ -319,6 +319,23 @@ export class SpotTheBugGame implements GameRunner {
     if (this.state.postRoundTimer) clearTimeout(this.state.postRoundTimer);
     for (const t of Object.values(this.state.disconnectTimers)) clearTimeout(t);
 
+    // Refund both antes (settle as a tie).
+    try {
+      const [a, b] = this.game.players;
+      await settleGame({
+        gameRoundId: (this.game as Game & { gameRoundId?: string }).gameRoundId!,
+        ante: this.game.ante,
+        playerAId: a.userId,
+        playerBId: b.userId,
+        winnerId: null,
+        pendingRefundIds: this.game.pendingRefundIds,
+      });
+    } catch (err) {
+      console.error("[spot_the_bug] abort refund failed", (err as Error).message);
+      // Pending refunds row stays unprocessed and the cold-start refunder
+      // will handle it later — money is not lost.
+    }
+
     this.io.to(this.game.roomId).emit("game_aborted", {
       gameId: this.game.id,
       reason,
