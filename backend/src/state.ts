@@ -1,8 +1,9 @@
-// In-memory state. Replaced with Postgres + Redis in Phase 6.
+// In-memory state for ephemeral things (queues, rooms, device-socket map).
+// Board posts moved to Postgres in Phase 6. Chat is intentionally
+// session-only and never written to durable storage.
 
 export type SocketId = string;
 export type RoomId = string;
-export type PostId = string;
 export type DeviceId = string;
 
 export type UserInfo = {
@@ -21,20 +22,9 @@ export type Room = {
   createdAt: number;
 };
 
-export type BoardPost = {
-  id: PostId;
-  handle: string;
-  tag: string;
-  body: string;
-  createdAt: number;
-  expiresAt: number;
-  reportCount: number;
-};
-
 export const users = new Map<SocketId, UserInfo>();
 export const queues = new Map<string, SocketId[]>();
 export const rooms = new Map<RoomId, Room>();
-export const boardPosts = new Map<PostId, BoardPost>();
 export const deviceSockets = new Map<DeviceId, Set<SocketId>>();
 
 export function getQueue(tag: string): SocketId[] {
@@ -58,17 +48,6 @@ export function removeFromAllQueues(socketId: SocketId) {
   for (const tag of Array.from(queues.keys())) {
     removeFromQueue(tag, socketId);
   }
-}
-
-export function sweepExpiredPosts(now = Date.now()): number {
-  let removed = 0;
-  for (const [id, post] of boardPosts) {
-    if (post.expiresAt <= now) {
-      boardPosts.delete(id);
-      removed++;
-    }
-  }
-  return removed;
 }
 
 export function registerDeviceSocket(deviceId: DeviceId, socketId: SocketId) {
