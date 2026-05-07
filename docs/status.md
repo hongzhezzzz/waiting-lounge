@@ -3,7 +3,9 @@
 The truth about what currently works — not what is planned. Updated whenever a phase or feature changes state.
 
 ## Current phase
-Phase 5 — **the spec §13 milestone is wired up, awaiting your real-Claude-Code test.** Your local Claude Code activity now drives the browser status badge and the "Claude needs your attention" overlay.
+Phase 9 — **CLI installer scaffolded.** `waiting-lounge install|pair|status|test|uninstall` works locally. Friends can now (in principle) install with one command instead of editing files by hand. End-to-end demo on a fresh machine still pending.
+
+Phase 8 (deploy) is fully wired: Vercel + Render + Supabase, with the badge replaying the device's last known status when a browser pairs, and `PostToolUse` hooks flipping the badge back to "working" after a permission is approved. Known edge cases logged in `docs/decisions.md`.
 
 ## What works
 - Phase 1 hook fires live from a real Claude Code session and writes sanitized events to `~/.waiting-lounge.log`.
@@ -19,7 +21,7 @@ Phase 5 — **the spec §13 milestone is wired up, awaiting your real-Claude-Cod
 - **Privacy verified end-to-end:** piping `{"prompt":"DO_NOT_LEAK","cwd":"/tmp/secret"}` into `node local-hook/hook.js attention` produced only `agent_event {deviceIdShort, status, delivered}` in the backend log — zero leakage.
 
 ## What's in progress
-Nothing. Waiting for the user to pair their browser and run a real Claude Code prompt to confirm the round trip.
+- Phase 9 CLI installer end-to-end demo. The CLI itself works; we still need to feel the friend-experience by pretending to be a fresh machine (or actually doing it on a different machine).
 
 ## What's blocked
 Nothing.
