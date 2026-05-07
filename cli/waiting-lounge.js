@@ -19,6 +19,7 @@ const path = require("path");
 const crypto = require("crypto");
 const http = require("http");
 const https = require("https");
+const readline = require("readline");
 
 const DEFAULT_BACKEND = "https://waiting-lounge.onrender.com";
 const DEFAULT_FRONTEND = "https://waiting-lounge.vercel.app";
@@ -85,23 +86,160 @@ function writeFrontendUrlIfMissing(url) {
   }
 }
 
+const HOOK_EVENTS = [
+  ["UserPromptSubmit", "start"],
+  ["Notification", "attention"],
+  ["PostToolUse", "resume"],
+  ["Stop", "stop"],
+];
+
 function settingsBlock(hookPath) {
-  return {
-    hooks: {
-      UserPromptSubmit: [
-        { matcher: "", hooks: [{ type: "command", command: `node ${hookPath} start` }] },
-      ],
-      Notification: [
-        { matcher: "", hooks: [{ type: "command", command: `node ${hookPath} attention` }] },
-      ],
-      PostToolUse: [
-        { matcher: "", hooks: [{ type: "command", command: `node ${hookPath} resume` }] },
-      ],
-      Stop: [
-        { matcher: "", hooks: [{ type: "command", command: `node ${hookPath} stop` }] },
-      ],
-    },
-  };
+  const block = { hooks: {} };
+  for (const [event, sub] of HOOK_EVENTS) {
+    block.hooks[event] = [
+      { matcher: "", hooks: [{ type: "command", command: `node ${hookPath} ${sub}` }] },
+    ];
+  }
+  return block;
+}
+
+function ask(question) {
+  return new Promise((resolve) => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      // Non-interactive: default to "no".
+      return resolve("");
+    }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve((answer || "").trim());
+    });
+  });
+}
+
+function mergeWaitingLoungeHooks(settings, hookPath) {
+  // Returns { settings, added, replaced } — caller writes back.
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    settings = {};
+  }
+  if (!settings.hooks || typeof settings.hooks !== "object" || Array.isArray(settings.hooks)) {
+    settings.hooks = {};
+  }
+
+  let added = 0;
+  let replaced = 0;
+
+  for (const [event, sub] of HOOK_EVENTS) {
+    const ourCommand = `node ${hookPath} ${sub}`;
+    const existing = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
+
+    // Strip any inner hook entries that point at our hook path. Keep
+    // anything else (other tools' hooks) intact.
+    const cleaned = [];
+    let foundOurs = false;
+    for (const block of existing) {
+      if (!block || typeof block !== "object" || !Array.isArray(block.hooks)) {
+        cleaned.push(block);
+        continue;
+      }
+      const innerCleaned = block.hooks.filter((h) => {
+        if (!h || typeof h !== "object" || typeof h.command !== "string") return true;
+        const refersToOurs = h.command.includes(hookPath);
+        if (refersToOurs) foundOurs = true;
+        return !refersToOurs;
+      });
+      if (innerCleaned.length > 0) {
+        cleaned.push({ ...block, hooks: innerCleaned });
+      }
+    }
+
+    cleaned.push({ matcher: "", hooks: [{ type: "command", command: ourCommand }] });
+    settings.hooks[event] = cleaned;
+    if (foundOurs) replaced++;
+    else added++;
+  }
+
+  return { settings, added, replaced };
+}
+
+function backupSettings(settingsPath) {
+  if (!fs.existsSync(settingsPath)) return null;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = `${settingsPath}.bak.${stamp}`;
+  fs.copyFileSync(settingsPath, backupPath);
+  return backupPath;
+}
+
+async function maybeWriteSettings(hookPath, autoYes) {
+  const settingsPath = path.join(HOME, ".claude", "settings.json");
+
+  let answer = "";
+  if (autoYes) {
+    answer = "y";
+  } else {
+    answer = await ask(
+      `Merge these hooks into ${settingsPath} automatically? [y/N] `,
+    );
+  }
+  const yes = /^(y|yes)$/i.test(answer);
+  if (!yes) {
+    console.log("");
+    console.log("OK — paste the JSON above into ~/.claude/settings.json yourself.");
+    return false;
+  }
+
+  // Read existing settings (or treat as empty if missing).
+  let existing = {};
+  if (fs.existsSync(settingsPath)) {
+    let raw;
+    try {
+      raw = fs.readFileSync(settingsPath, "utf8");
+    } catch (err) {
+      console.error("");
+      console.error(`Couldn't read ${settingsPath}: ${err.message}`);
+      console.error("Paste the JSON above into the file by hand instead.");
+      return false;
+    }
+    if (raw.trim().length > 0) {
+      try {
+        existing = JSON.parse(raw);
+      } catch (err) {
+        console.error("");
+        console.error(`${settingsPath} doesn't parse as JSON (${err.message}).`);
+        console.error("Refusing to overwrite — paste the JSON above by hand and fix any syntax issues.");
+        return false;
+      }
+    }
+  } else {
+    // Make sure ~/.claude exists.
+    const dir = path.dirname(settingsPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+
+  const backupPath = backupSettings(settingsPath);
+  const { settings, added, replaced } = mergeWaitingLoungeHooks(existing, hookPath);
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
+
+  console.log("");
+  if (backupPath) {
+    console.log(`✓ Wrote ${settingsPath}.`);
+    console.log(`  Backup of the previous version: ${backupPath}`);
+  } else {
+    console.log(`✓ Created ${settingsPath} (it didn't exist before).`);
+  }
+  if (replaced > 0 && added > 0) {
+    console.log(`  Added ${added} hook entr${added === 1 ? "y" : "ies"}, replaced ${replaced}.`);
+  } else if (replaced > 0) {
+    console.log(`  Replaced ${replaced} existing waiting-lounge hook entr${replaced === 1 ? "y" : "ies"}.`);
+  } else {
+    console.log(`  Added ${added} hook entr${added === 1 ? "y" : "ies"}.`);
+  }
+  console.log("");
+  console.log("If anything goes wrong, restore from the backup above (or just delete the");
+  console.log("`hooks` block we added — Claude Code will fall back to its defaults).");
+  return true;
 }
 
 function postJson(urlString, data, timeoutMs = 3000) {
@@ -198,11 +336,9 @@ function getJson(urlString, timeoutMs = 3000) {
 
 // --- subcommands ---
 
-function cmdInstall(args) {
-  const wantsWriteSettings = args.includes("--write-settings");
-  if (wantsWriteSettings) {
-    console.error("--write-settings is not implemented yet. Falling back to print mode.");
-  }
+async function cmdInstall(args) {
+  const autoYes = args.includes("--write-settings") || args.includes("-y");
+  const printOnly = args.includes("--print-only");
 
   const hookSrc = locateHookSource();
   if (!hookSrc) {
@@ -231,22 +367,31 @@ function cmdInstall(args) {
   console.log("");
   console.log("---");
   console.log("");
-  console.log("Step 1 — Paste this into ~/.claude/settings.json (under the top-level object):");
+  console.log("Hook entries to add to ~/.claude/settings.json:");
   console.log("");
   console.log(JSON.stringify(settingsBlock(HOOK_PATH), null, 2));
   console.log("");
-  console.log("If your settings.json already has other top-level keys, merge the `hooks` field.");
-  console.log("If `hooks` already has entries, add ours alongside (don't overwrite).");
-  console.log("");
-  console.log("Step 2 — Pair your browser (one click, one time):");
+
+  let merged = false;
+  if (!printOnly) {
+    merged = await maybeWriteSettings(HOOK_PATH, autoYes);
+  }
+
+  if (!merged) {
+    console.log("If your settings.json already has other top-level keys, merge the `hooks` field.");
+    console.log("If `hooks` already has entries, add ours alongside (don't overwrite).");
+    console.log("");
+  }
+
+  console.log("Pair your browser (one click, one time):");
   console.log("");
   console.log(`  ${frontendUrl}/pair?d=${deviceId}`);
   console.log("");
-  console.log("Step 3 — Verify the connection:");
+  console.log("Then verify with:");
   console.log("");
   console.log("  waiting-lounge test");
   console.log("");
-  console.log("Then start a Claude Code session as normal. The header badge in the lounge");
+  console.log("Start a Claude Code session as normal. The header badge in the lounge");
   console.log(`should flip through "Claude is working" → "may be done" automatically.`);
 }
 
@@ -386,7 +531,9 @@ function cmdHelp() {
   console.log("waiting-lounge — companion app for Claude Code");
   console.log("");
   console.log("Usage:");
-  console.log("  waiting-lounge install      Install the local hook and print settings to paste");
+  console.log("  waiting-lounge install      Install the local hook. Prompts to merge into");
+  console.log("                              ~/.claude/settings.json automatically (with backup).");
+  console.log("                              Pass -y to skip the prompt, --print-only to never write.");
   console.log("  waiting-lounge pair         Print the one-time browser pairing URL");
   console.log("  waiting-lounge status       Show what's installed and whether the backend is reachable");
   console.log("  waiting-lounge test         Send a fake event to the backend; prints what listeners saw");
@@ -405,7 +552,7 @@ const args = process.argv.slice(3);
 (async () => {
   switch (cmd) {
     case "install":
-      cmdInstall(args);
+      await cmdInstall(args);
       break;
     case "pair":
       cmdPair();
