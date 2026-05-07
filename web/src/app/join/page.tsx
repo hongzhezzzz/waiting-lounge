@@ -29,7 +29,7 @@ export default function JoinPage() {
   useEffect(() => {
     if (queueState === "idle") return;
     const socket = getSocket();
-    function onWaiting(_p: unknown) {
+    function onWaiting() {
       setQueueState("waiting");
     }
     function onStarted(p: { gameId: string; roomId: string; gameType: string; peerHandle: string }) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { getSocket } from "@/lib/socket";
 import { useAuth } from "@/lib/auth";
@@ -27,6 +27,24 @@ type FinalState = {
   scores: Record<string, number>;
   payout: number;
 };
+
+type StateUpdate =
+  | { gameId: string; type: "round_start"; round: number; total: number; snippet: Snippet; endsAt: number; scores: Record<string, number> }
+  | { gameId: string; type: "click_recorded"; round: number; line: number }
+  | { gameId: string; type: "round_resolved"; round: number; total: number; scores: Record<string, number>; buggyLine: number; explanation: string; winnerSocketId: string | null; clicks: Record<string, number> }
+  | { gameId: string; type: "player_disconnected"; socketId: string; graceMs: number }
+  | { gameId: string; type: "player_reconnected"; userId: string; socketId: string };
+
+type ResolvedPayload = {
+  gameId: string;
+  outcome: "win" | "tie";
+  winnerSocketId: string | null;
+  winnerUserId: string | null;
+  scores: Record<string, number>;
+  payout: number;
+};
+
+type AbortedPayload = { gameId?: string; reason?: string };
 
 export default function GameRoomPage() {
   const params = useParams<{ gameType: string; roomId: string }>();
@@ -57,7 +75,7 @@ export default function GameRoomPage() {
       setMyHandle(p.handle);
       mySocketIdRef.current = p.socketId;
     }
-    function onState(p: any) {
+    function onState(p: StateUpdate) {
       if (p.gameId !== gameId) return;
       if (p.type === "round_start") {
         setRound({
@@ -82,23 +100,23 @@ export default function GameRoomPage() {
             clicks: p.clicks,
           },
         } : prev);
-      } else if (p.type === "player_disconnected") {
-        // ignore for now — final result will arrive
       }
     }
-    function onResolved(p: any) {
+    function onResolved(p: ResolvedPayload) {
       if (p.gameId !== gameId) return;
-      const winnerHandle = p.winnerSocketId
-        ? Object.keys(p.scores).find((h) => p.scores[h] != null && p.winnerSocketId === mySocketIdRef.current ? h === myHandle : true) ?? null
-        : null;
       setFinal({
         outcome: p.outcome,
-        winnerHandle: p.winnerUserId === null ? null : (p.winnerSocketId === mySocketIdRef.current ? myHandle : peerHandle),
+        winnerHandle:
+          p.winnerUserId === null
+            ? null
+            : p.winnerSocketId === mySocketIdRef.current
+              ? myHandle
+              : peerHandle,
         scores: p.scores,
         payout: p.payout,
       });
     }
-    function onAborted(p: any) {
+    function onAborted(p: AbortedPayload) {
       if (p.gameId && p.gameId !== gameId) return;
       setAborted(p.reason || "unknown");
     }
