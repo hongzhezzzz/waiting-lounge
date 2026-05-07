@@ -8,6 +8,7 @@ import { InGameProvider } from "@/lib/inGame";
 import { SocketAuthBridge } from "@/components/SocketAuthBridge";
 import { GlobalAgentOverlay } from "@/components/GlobalAgentOverlay";
 import { HeaderNav } from "@/components/HeaderNav";
+import { IncomingInviteBanner } from "@/components/IncomingInviteBanner";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -45,6 +46,7 @@ export default function RootLayout({
                   </div>
                 </footer>
                 <GlobalAgentOverlay />
+                <IncomingInviteBanner />
               </InGameProvider>
             </AgentStatusProvider>
           </PointsProvider>
