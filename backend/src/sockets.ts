@@ -31,6 +31,11 @@ const DEVICE_ID_PATTERN = /^[a-f0-9-]{8,64}$/i;
 const ALLOWED_GAME_TYPES: ReadonlyArray<GameType> = ["spot_the_bug", "brain_bet"];
 const ALLOWED_DURATIONS: ReadonlyArray<GameDuration> = [1, 5, 10];
 const INVITE_TTL_MS = 30_000;
+// Pool matchmaking ("Find a match") uses fixed defaults so all
+// queueing players land in the same per-gameType bucket. 3b.3 will
+// add a bot-fill timer on top of this same flow.
+const POOL_DEFAULT_DURATION: GameDuration = 5;
+const POOL_DEFAULT_ANTE = 100;
 
 // Game-mode queue: per (gameType, durationMin, ante) tuple.
 const gameQueues = new Map<string, string[]>();
@@ -399,6 +404,56 @@ export function registerSocketHandlers(io: Server) {
     socket.on("cancel_game_queue", () => {
       removeFromGameQueues(socket.id);
       socket.emit("game_queue_cancelled", {});
+    });
+
+    // Pool matchmaking — single shared queue per gameType with fixed
+    // defaults, so any two players hitting "Find a match" pair up. Falls
+    // through to the same `gameQueueKey` map as queue_for_game, meaning
+    // an explicit-tuple queueer with the same defaults will also pair.
+    socket.on("queue_for_pool", async (payload: { gameType?: string }) => {
+      if (!me.userId) {
+        return socket.emit("error_message", { message: "Sign in to play games." });
+      }
+      const gameType = (payload?.gameType || "").toString() as GameType;
+      if (!ALLOWED_GAME_TYPES.includes(gameType)) {
+        return socket.emit("error_message", { message: "Invalid game type." });
+      }
+
+      if (me.roomId) await cleanupCurrentRoom(socket, me);
+
+      const balance = await getBalance(me.userId);
+      if (balance == null || balance < POOL_DEFAULT_ANTE) {
+        return socket.emit("error_message", {
+          message: `Not enough points (${balance ?? 0} < ${POOL_DEFAULT_ANTE}).`,
+        });
+      }
+
+      const durationMin = POOL_DEFAULT_DURATION;
+      const ante = POOL_DEFAULT_ANTE;
+      const key = gameQueueKey(gameType, durationMin, ante);
+      const q = getGameQueue(key);
+
+      const peerIdx = q.findIndex((peerId) => {
+        if (peerId === socket.id) return false;
+        const peer = users.get(peerId);
+        if (!peer || !peer.userId) return false;
+        if (peer.userId === me.userId) return false;
+        return true;
+      });
+
+      if (peerIdx === -1) {
+        q.push(socket.id);
+        socket.emit("pool_waiting", { gameType, durationMin, ante });
+        log("pool_queued", { socketId: socket.id, key });
+        return;
+      }
+
+      const peerId = q.splice(peerIdx, 1)[0];
+      const ok = await startGameBetween(io, socket.id, peerId, gameType, durationMin, ante);
+      if (!ok) {
+        q.push(socket.id);
+        socket.emit("pool_waiting", { gameType, durationMin, ante });
+      }
     });
 
     socket.on("list_idle_users", () => {
