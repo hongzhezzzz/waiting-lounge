@@ -8,8 +8,6 @@ export type Snippet = {
   code: string[];
 };
 
-type Click = { line: number; correct: boolean };
-
 export type SpotTheBugView = {
   round: number;
   total: number;
