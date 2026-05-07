@@ -26,7 +26,29 @@ export const MODES = [
   { id: "match", label: "1-on-1 quick chat", description: "Get matched with another waiting builder." },
   { id: "board", label: "Message board", description: "Post a thought, read what others wrote." },
   { id: "lobby", label: "Browse lobby", description: "See what people are waiting on." },
+  { id: "game", label: "Compete head-to-head", description: "Challenge another waiter for points." },
 ] as const;
+
+export const GAMES = [
+  {
+    id: "spot_the_bug" as const,
+    label: "Spot the Bug",
+    description: "Both see the same buggy snippet. First correct line click wins the round.",
+    enabled: true,
+  },
+  {
+    id: "brain_bet" as const,
+    label: "Brain Bet",
+    description: "Mixed-bag head-to-head: estimation, poker, and more. Coming Phase 12.",
+    enabled: false,
+  },
+] as const;
+export type GameTypeId = (typeof GAMES)[number]["id"];
+
+export const GAME_DURATIONS = [1, 5, 10] as const;
+export type GameDuration = (typeof GAME_DURATIONS)[number];
+
+export const DEFAULT_ANTE = 100;
 
 export const STARTER_PROMPTS = [
   "What is your agent working on, vaguely?",

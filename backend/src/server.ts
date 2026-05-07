@@ -1,4 +1,7 @@
 import "dotenv/config";
+// jose's webapi needs globalThis.crypto, missing in Node 18. Harmless on Node 20+.
+import { webcrypto } from "node:crypto";
+if (!globalThis.crypto) (globalThis as unknown as { crypto: unknown }).crypto = webcrypto;
 import express from "express";
 import http from "http";
 import cors from "cors";
@@ -7,6 +10,10 @@ import { registerSocketHandlers } from "./sockets.js";
 import { createBoardRouter, seedWelcomePosts } from "./routes/board.js";
 import { createAgentEventRouter } from "./routes/agentEvent.js";
 import { applySchema, pingDb, query } from "./db/index.js";
+import { processStalePendingRefunds } from "./games/transferPoints.js";
+import { createMeRouter } from "./routes/me.js";
+// Importing games/index registers all game types into the runner registry.
+import "./games/index.js";
 
 const PORT = Number(process.env.PORT || 4000);
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
@@ -24,6 +31,7 @@ app.get("/health", async (_req, res) => {
 });
 
 app.use("/api/board", createBoardRouter());
+app.use("/api/me", createMeRouter());
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -56,6 +64,15 @@ async function bootstrap() {
   } catch (err) {
     console.error("[bootstrap] db setup failed:", (err as Error).message);
     console.error("[bootstrap] starting anyway — board endpoints will return 500 until the db is reachable.");
+  }
+
+  try {
+    const refunded = await processStalePendingRefunds();
+    if (refunded > 0) {
+      console.log(`[bootstrap] cold-start refunds processed: ${refunded}`);
+    }
+  } catch (err) {
+    console.error("[bootstrap] refund processor failed:", (err as Error).message);
   }
 
   server.listen(PORT, () => {

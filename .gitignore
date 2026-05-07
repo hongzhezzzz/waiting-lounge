@@ -1,5 +1,7 @@
 node_modules/
 .next/
+.next-*/
+.vercel/
 dist/
 build/
 out/
@@ -21,3 +23,7 @@ out/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .mcp.json
+
+# Phase-11 dev test scripts (kept for re-running, not for prod).
+backend/test-*.mjs
+backend/_polyfill-*.mjs
