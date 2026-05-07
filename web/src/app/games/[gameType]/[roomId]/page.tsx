@@ -309,6 +309,16 @@ export default function GameRoomPage() {
           onIndianPoker={(choice) => emitAction({ type: "indian_poker_decide", choice })}
           onEstimation={(value) => emitAction({ type: "estimation_submit", value })}
           onChicken={(value) => emitAction({ type: "chicken_pick", value })}
+          onBigO={(choice) => {
+            // Optimistic lock — server doesn't echo the choice in lock_recorded.
+            setBbRound((prev) => prev ? { ...prev, myDecision: choice } : prev);
+            emitAction({ type: "big_o_lock", choice });
+          }}
+          onMontyMirage={(value) => emitAction({ type: "monty_mirage_submit", value })}
+          onGeoTrivia={(choice) => {
+            setBbRound((prev) => prev ? { ...prev, myDecision: choice } : prev);
+            emitAction({ type: "geo_trivia_lock", choice });
+          }}
         />
       </div>
     );
