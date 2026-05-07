@@ -18,6 +18,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const QUESTIONS = JSON.parse(
   readFileSync(path.join(here, "estimationBank.json"), "utf8"),
 ) as EstimationQuestion[];
+const BIG_O_BANK = JSON.parse(
+  readFileSync(path.join(here, "bigOBank.json"), "utf8"),
+) as BigOQuestion[];
+const MONTY_BANK = JSON.parse(
+  readFileSync(path.join(here, "montyMirageBank.json"), "utf8"),
+) as MontyQuestion[];
+const GEO_BANK = JSON.parse(
+  readFileSync(path.join(here, "geoTriviaBank.json"), "utf8"),
+) as GeoQuestion[];
 
 type EstimationQuestion = {
   id: string;
@@ -25,14 +34,52 @@ type EstimationQuestion = {
   answer: number;
   explanation: string;
 };
+type BigOQuestion = {
+  id: string;
+  language: string;
+  code: string[];
+  answer: string;
+  explanation: string;
+};
+const BIG_O_CHOICES = [
+  "O(1)",
+  "O(log log n)",
+  "O(log n)",
+  "O(n)",
+  "O(n log n)",
+  "O(n^2)",
+  "O(n^3)",
+  "O(2^n)",
+  "O(m + n)",
+  "O(m*n)",
+  "O(V + E)",
+] as const;
+type MontyQuestion = {
+  id: string;
+  prompt: string;
+  answer: number;
+  explanation: string;
+};
+type GeoQuestion = {
+  id: string;
+  prompt: string;
+  choices: string[];
+  answer: string;
+  explanation: string;
+};
 
-type RoundType = "indian_poker" | "estimation" | "chicken";
-const ALL_ROUND_TYPES: ReadonlyArray<RoundType> = ["indian_poker", "estimation", "chicken"];
+type RoundType = "indian_poker" | "estimation" | "chicken" | "big_o" | "monty_mirage" | "geo_trivia";
+const ALL_ROUND_TYPES: ReadonlyArray<RoundType> = [
+  "indian_poker", "estimation", "chicken", "big_o", "monty_mirage", "geo_trivia",
+];
 
 const ROUND_TIMEOUT_MS: Record<RoundType, number> = {
   indian_poker: 18_000,
   estimation: 35_000,
   chicken: 18_000,
+  big_o: 30_000,
+  monty_mirage: 30_000,
+  geo_trivia: 18_000,
 };
 const POST_ROUND_PAUSE_MS = 3000;
 const DISCONNECT_GRACE_MS = 10_000;
@@ -66,7 +113,29 @@ type ChickenState = {
   picks: Record<SocketId, number | undefined>;
 };
 
-type RoundState = IndianPokerState | EstimationState | ChickenState;
+type BigOState = {
+  type: "big_o";
+  questionId: string;
+  answer: string;
+  // socketId -> the choice they locked, or "wrong" / "correct" status
+  locks: Record<SocketId, string | undefined>;
+};
+
+type MontyMirageState = {
+  type: "monty_mirage";
+  questionId: string;
+  answer: number;
+  submissions: Record<SocketId, number | undefined>;
+};
+
+type GeoTriviaState = {
+  type: "geo_trivia";
+  questionId: string;
+  answer: string;
+  locks: Record<SocketId, string | undefined>;
+};
+
+type RoundState = IndianPokerState | EstimationState | ChickenState | BigOState | MontyMirageState | GeoTriviaState;
 
 type Round = {
   index: number;
@@ -85,6 +154,9 @@ type State = {
   roundIdx: number;
   currentRound: Round | null;
   usedQuestionIds: Set<string>;
+  usedBigOIds: Set<string>;
+  usedMontyIds: Set<string>;
+  usedGeoIds: Set<string>;
   roundTimer: NodeJS.Timeout | null;
   postRoundTimer: NodeJS.Timeout | null;
   disconnectTimers: Record<SocketId, NodeJS.Timeout>;
@@ -104,6 +176,9 @@ export class BrainBetGame implements GameRunner {
       roundIdx: 0,
       currentRound: null,
       usedQuestionIds: new Set(),
+      usedBigOIds: new Set(),
+      usedMontyIds: new Set(),
+      usedGeoIds: new Set(),
       roundTimer: null,
       postRoundTimer: null,
       disconnectTimers: {},
@@ -167,8 +242,7 @@ export class BrainBetGame implements GameRunner {
         endsAt: round.endsAt,
         payload: { question: q?.question ?? "" },
       });
-    } else {
-      // chicken
+    } else if (type === "chicken") {
       this.io.to(this.game.roomId).emit("game_state_update", {
         gameId: this.game.id,
         type: "round_start",
@@ -178,6 +252,50 @@ export class BrainBetGame implements GameRunner {
         scores: this.publicScores(),
         endsAt: round.endsAt,
         payload: { range: [1, 10], bustThreshold: 8 },
+      });
+    } else if (type === "big_o") {
+      const bs = roundState as BigOState;
+      const q = BIG_O_BANK.find((x) => x.id === bs.questionId);
+      this.io.to(this.game.roomId).emit("game_state_update", {
+        gameId: this.game.id,
+        type: "round_start",
+        roundType: "big_o",
+        round: round.index,
+        total: round.total,
+        scores: this.publicScores(),
+        endsAt: round.endsAt,
+        payload: {
+          language: q?.language ?? "",
+          code: q?.code ?? [],
+          choices: BIG_O_CHOICES,
+        },
+      });
+    } else if (type === "monty_mirage") {
+      const ms = roundState as MontyMirageState;
+      const q = MONTY_BANK.find((x) => x.id === ms.questionId);
+      this.io.to(this.game.roomId).emit("game_state_update", {
+        gameId: this.game.id,
+        type: "round_start",
+        roundType: "monty_mirage",
+        round: round.index,
+        total: round.total,
+        scores: this.publicScores(),
+        endsAt: round.endsAt,
+        payload: { prompt: q?.prompt ?? "" },
+      });
+    } else {
+      // geo_trivia
+      const gs = roundState as GeoTriviaState;
+      const q = GEO_BANK.find((x) => x.id === gs.questionId);
+      this.io.to(this.game.roomId).emit("game_state_update", {
+        gameId: this.game.id,
+        type: "round_start",
+        roundType: "geo_trivia",
+        round: round.index,
+        total: round.total,
+        scores: this.publicScores(),
+        endsAt: round.endsAt,
+        payload: { prompt: q?.prompt ?? "", choices: q?.choices ?? [] },
       });
     }
 
@@ -205,6 +323,27 @@ export class BrainBetGame implements GameRunner {
       const q = arr[Math.floor(Math.random() * arr.length)];
       this.state.usedQuestionIds.add(q.id);
       return { type, questionId: q.id, answer: q.answer, submissions: {} };
+    }
+    if (type === "big_o") {
+      const pool = BIG_O_BANK.filter((q) => !this.state.usedBigOIds.has(q.id));
+      const arr = pool.length > 0 ? pool : BIG_O_BANK;
+      const q = arr[Math.floor(Math.random() * arr.length)];
+      this.state.usedBigOIds.add(q.id);
+      return { type, questionId: q.id, answer: q.answer, locks: {} };
+    }
+    if (type === "monty_mirage") {
+      const pool = MONTY_BANK.filter((q) => !this.state.usedMontyIds.has(q.id));
+      const arr = pool.length > 0 ? pool : MONTY_BANK;
+      const q = arr[Math.floor(Math.random() * arr.length)];
+      this.state.usedMontyIds.add(q.id);
+      return { type, questionId: q.id, answer: q.answer, submissions: {} };
+    }
+    if (type === "geo_trivia") {
+      const pool = GEO_BANK.filter((q) => !this.state.usedGeoIds.has(q.id));
+      const arr = pool.length > 0 ? pool : GEO_BANK;
+      const q = arr[Math.floor(Math.random() * arr.length)];
+      this.state.usedGeoIds.add(q.id);
+      return { type, questionId: q.id, answer: q.answer, locks: {} };
     }
     return { type: "chicken", picks: {} };
   }
@@ -263,6 +402,112 @@ export class BrainBetGame implements GameRunner {
       if (allPicked) this.resolveChicken(round);
       return;
     }
+
+    if (round.type === "big_o" && a.type === "big_o_lock") {
+      this.handleLockAnswer(round, socketId, String(a.choice ?? ""), () => this.resolveBigO(round));
+      return;
+    }
+
+    if (round.type === "monty_mirage" && a.type === "monty_mirage_submit") {
+      const ms = round.state as MontyMirageState;
+      if (ms.submissions[socketId] != null) return;
+      if (typeof a.value !== "number" || !Number.isFinite(a.value)) return;
+      const v = Math.max(0, Math.min(100, Math.round(a.value)));
+      ms.submissions[socketId] = v;
+      this.io.to(socketId).emit("game_state_update", {
+        gameId: this.game.id,
+        type: "submission_recorded",
+        round: round.index,
+        value: v,
+      });
+      const allSubmitted = this.game.players.every((p) => ms.submissions[p.socketId] != null);
+      if (allSubmitted) this.resolveMontyMirage(round);
+      return;
+    }
+
+    if (round.type === "geo_trivia" && a.type === "geo_trivia_lock") {
+      this.handleLockAnswer(round, socketId, String(a.choice ?? ""), () => this.resolveGeoTrivia(round));
+      return;
+    }
+  }
+
+  // Shared helper for "first correct lock wins" round types (Big-O, Geo Trivia).
+  // - Correct lock: the locker wins immediately, round resolves.
+  // - Wrong lock: this player is locked out. If the other player has also
+  //   locked wrong (or has no time left), resolve with no winner.
+  private handleLockAnswer(round: Round, socketId: SocketId, choice: string, onComplete: () => void) {
+    const state = round.state as BigOState | GeoTriviaState;
+    if (state.locks[socketId] != null) return;
+    if (!choice) return;
+
+    const correct = choice === state.answer;
+    state.locks[socketId] = correct ? "correct" : choice;
+
+    this.io.to(socketId).emit("game_state_update", {
+      gameId: this.game.id,
+      type: "lock_recorded",
+      round: round.index,
+      correct,
+    });
+
+    if (correct) {
+      // First correct lock wins immediately.
+      this.finishRound(round, socketId, this.lockReveal(round));
+      return;
+    }
+    // Wrong: see if both have locked → both wrong → no winner.
+    const allLocked = this.game.players.every((p) => state.locks[p.socketId] != null);
+    if (allLocked) onComplete();
+  }
+
+  private lockReveal(round: Round): Record<string, unknown> {
+    const state = round.state as BigOState | GeoTriviaState;
+    if (state.type === "big_o") {
+      const q = BIG_O_BANK.find((x) => x.id === state.questionId);
+      return {
+        answer: state.answer,
+        explanation: q?.explanation ?? "",
+        locks: state.locks,
+      };
+    }
+    const q = GEO_BANK.find((x) => x.id === state.questionId);
+    return {
+      answer: state.answer,
+      explanation: q?.explanation ?? "",
+      locks: state.locks,
+    };
+  }
+
+  private resolveBigO(round: Round) {
+    // Called when both have locked and neither was correct (or on timeout).
+    this.finishRound(round, null, this.lockReveal(round));
+  }
+
+  private resolveGeoTrivia(round: Round) {
+    this.finishRound(round, null, this.lockReveal(round));
+  }
+
+  private resolveMontyMirage(round: Round) {
+    const ms = round.state as MontyMirageState;
+    const [a, b] = this.game.players;
+    const aSub = ms.submissions[a.socketId];
+    const bSub = ms.submissions[b.socketId];
+    let winnerSocketId: SocketId | null = null;
+    if (aSub == null && bSub == null) winnerSocketId = null;
+    else if (aSub == null) winnerSocketId = b.socketId;
+    else if (bSub == null) winnerSocketId = a.socketId;
+    else {
+      const aDist = Math.abs(aSub - ms.answer);
+      const bDist = Math.abs(bSub - ms.answer);
+      if (aDist < bDist) winnerSocketId = a.socketId;
+      else if (bDist < aDist) winnerSocketId = b.socketId;
+    }
+    const q = MONTY_BANK.find((x) => x.id === ms.questionId);
+    this.finishRound(round, winnerSocketId, {
+      answer: ms.answer,
+      explanation: q?.explanation ?? "",
+      submissions: ms.submissions,
+    });
   }
 
   private resolveIndianPoker(round: Round) {
@@ -364,7 +609,10 @@ export class BrainBetGame implements GameRunner {
     if (!round || round.resolved) return;
     if (round.type === "indian_poker") this.resolveIndianPoker(round);
     else if (round.type === "estimation") this.resolveEstimation(round);
-    else this.resolveChicken(round);
+    else if (round.type === "chicken") this.resolveChicken(round);
+    else if (round.type === "big_o") this.resolveBigO(round);
+    else if (round.type === "monty_mirage") this.resolveMontyMirage(round);
+    else this.resolveGeoTrivia(round);
   }
 
   handleDisconnect(socketId: SocketId) {

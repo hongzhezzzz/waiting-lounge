@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from "react";
 
-export type BrainBetRoundType = "indian_poker" | "estimation" | "chicken";
+export type BrainBetRoundType =
+  | "indian_poker"
+  | "estimation"
+  | "chicken"
+  | "big_o"
+  | "monty_mirage"
+  | "geo_trivia";
 
 export type BrainBetRoundView = {
   round: number;
@@ -23,6 +29,9 @@ export type BrainBetRoundView = {
   onIndianPoker: (choice: "bet" | "fold") => void;
   onEstimation: (value: number) => void;
   onChicken: (value: number) => void;
+  onBigO: (choice: string) => void;
+  onMontyMirage: (value: number) => void;
+  onGeoTrivia: (choice: string) => void;
 };
 
 export function BrainBetRound(p: BrainBetRoundView) {
@@ -71,6 +80,9 @@ export function BrainBetRound(p: BrainBetRoundView) {
   if (p.roundType === "indian_poker") body = <IndianPokerView {...p} />;
   else if (p.roundType === "estimation") body = <EstimationView {...p} />;
   else if (p.roundType === "chicken") body = <ChickenView {...p} />;
+  else if (p.roundType === "big_o") body = <BigOView {...p} />;
+  else if (p.roundType === "monty_mirage") body = <MontyMirageView {...p} />;
+  else if (p.roundType === "geo_trivia") body = <GeoTriviaView {...p} />;
 
   return (
     <div>
@@ -83,7 +95,10 @@ export function BrainBetRound(p: BrainBetRoundView) {
 function labelFor(t: BrainBetRoundType): string {
   if (t === "indian_poker") return "Indian Poker";
   if (t === "estimation") return "Estimation";
-  return "Chicken Numbers";
+  if (t === "chicken") return "Chicken Numbers";
+  if (t === "big_o") return "Big-O Showdown";
+  if (t === "monty_mirage") return "Monty Mirage";
+  return "Geo Trivia";
 }
 
 // ---------- Indian Poker ----------
@@ -281,6 +296,185 @@ function ChickenView(p: BrainBetRoundView) {
             </span>
           </p>
           <WinLoseLine winner={resolved.winnerSocketId} mySocketId={resolved.mySocketId} bust={reveal.bust} />
+        </RevealCard>
+      )}
+    </div>
+  );
+}
+
+// ---------- Big-O Showdown ----------
+
+function BigOView(p: BrainBetRoundView) {
+  const payload = p.payload as { language: string; code: string[]; choices: readonly string[] };
+  const myLock = p.myDecision as "correct" | string | null; // server doesn't echo wrong/correct via myDecision; we get a separate lock_recorded
+  // Note: page state updates `myDecision` based on the lock_recorded event content, but
+  // BrainBetRound just renders. The page will pass myDecision through when locked.
+  const resolved = p.resolved;
+  const reveal = resolved?.reveal as
+    | { answer?: string; explanation?: string; locks?: Record<string, string | undefined> }
+    | undefined;
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-4">
+        <div className="text-xs text-muted mb-2 font-mono">{payload.language}</div>
+        <pre className="font-mono text-sm leading-7">
+          {payload.code.map((line, i) => (
+            <code key={i} className="block px-3 py-1">
+              <span className="text-muted mr-3 inline-block w-6 text-right">{i + 1}</span>
+              {line || " "}
+            </code>
+          ))}
+        </pre>
+      </div>
+      <p className="text-sm text-muted">Pick the time complexity. First correct lock wins; wrong lock locks you out.</p>
+      <div className="grid grid-cols-3 gap-2">
+        {payload.choices.map((c) => {
+          const locked = myLock != null;
+          const isMine = myLock === c;
+          const isAnswer = resolved && reveal?.answer === c;
+          const isMyWrong = resolved && reveal?.locks?.[resolved.mySocketId ?? ""] === c && c !== reveal?.answer;
+          return (
+            <button
+              key={c}
+              disabled={locked || !!resolved}
+              onClick={() => p.onBigO(c)}
+              className={`px-3 py-3 rounded-xl border font-mono text-sm transition disabled:cursor-not-allowed ${
+                isAnswer ? "border-sage bg-sage-soft text-sage-deep" :
+                isMyWrong ? "border-amber-400 bg-amber-100 text-amber-900" :
+                isMine ? "border-sage bg-sage-soft" :
+                locked || resolved ? "border-line bg-surface opacity-50" :
+                "border-line bg-surface hover:border-sage hover:bg-sage-soft"
+              }`}
+            >
+              {c}
+            </button>
+          );
+        })}
+      </div>
+      {!resolved && myLock != null && (
+        <p className="text-center text-sm text-muted">Locked. Waiting for opponent…</p>
+      )}
+      {resolved && reveal && (
+        <RevealCard>
+          <p className="text-sm">Answer: <span className="font-mono text-sage-deep">{reveal.answer}</span></p>
+          {reveal.explanation && <p className="text-xs text-muted italic">{reveal.explanation}</p>}
+          <WinLoseLine winner={resolved.winnerSocketId} mySocketId={resolved.mySocketId} />
+        </RevealCard>
+      )}
+    </div>
+  );
+}
+
+// ---------- Monty Mirage ----------
+
+function MontyMirageView(p: BrainBetRoundView) {
+  const payload = p.payload as { prompt: string };
+  const submitted = p.myDecision as number | null;
+  const [draft, setDraft] = useState("");
+  const resolved = p.resolved;
+  const reveal = resolved?.reveal as
+    | { answer?: number; explanation?: string; submissions?: Record<string, number | undefined> }
+    | undefined;
+
+  function submit() {
+    const v = Number(draft);
+    if (!Number.isFinite(v)) return;
+    p.onMontyMirage(Math.max(0, Math.min(100, Math.round(v))));
+    setDraft("");
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-5">
+        <p className="text-sm text-muted uppercase tracking-wider mb-2">Probability puzzle</p>
+        <p className="text-lg text-ink">{payload.prompt}</p>
+      </div>
+      {!resolved && submitted == null && (
+        <div className="flex gap-2 items-center">
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="0–100"
+            className="flex-1 border border-line rounded-lg px-3 py-2 bg-surface focus:border-sage focus:outline-none font-mono"
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          />
+          <span className="text-muted">%</span>
+          <button onClick={submit} disabled={draft === ""} className="btn-primary disabled:opacity-50">Submit</button>
+        </div>
+      )}
+      {!resolved && submitted != null && (
+        <p className="text-center text-sm text-muted">You guessed <span className="font-mono text-ink">{submitted}%</span>. Waiting for opponent…</p>
+      )}
+      {resolved && reveal && (
+        <RevealCard>
+          <p className="text-sm">Truth: <span className="font-mono text-ink">{reveal.answer}%</span></p>
+          <p className="text-sm">
+            You: <span className="font-mono text-ink">{(reveal.submissions?.[resolved.mySocketId ?? ""] ?? "—").toString()}%</span>
+            <span className="mx-3">·</span>
+            Opp: <span className="font-mono text-ink">
+              {(Object.entries(reveal.submissions ?? {}).find(([sid]) => sid !== resolved.mySocketId)?.[1] ?? "—").toString()}%
+            </span>
+          </p>
+          {reveal.explanation && <p className="text-xs text-muted italic">{reveal.explanation}</p>}
+          <WinLoseLine winner={resolved.winnerSocketId} mySocketId={resolved.mySocketId} />
+        </RevealCard>
+      )}
+    </div>
+  );
+}
+
+// ---------- Geo Trivia ----------
+
+function GeoTriviaView(p: BrainBetRoundView) {
+  const payload = p.payload as { prompt: string; choices: string[] };
+  const myLock = p.myDecision as string | null;
+  const resolved = p.resolved;
+  const reveal = resolved?.reveal as
+    | { answer?: string; explanation?: string; locks?: Record<string, string | undefined> }
+    | undefined;
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-5">
+        <p className="text-lg text-ink">{payload.prompt}</p>
+      </div>
+      <p className="text-sm text-muted">First correct lock wins; wrong lock locks you out.</p>
+      <div className={`grid ${payload.choices.length === 2 ? "grid-cols-2" : "grid-cols-3"} gap-2`}>
+        {payload.choices.map((c) => {
+          const locked = myLock != null;
+          const isMine = myLock === c;
+          const isAnswer = resolved && reveal?.answer === c;
+          const isMyWrong = resolved && reveal?.locks?.[resolved.mySocketId ?? ""] === c && c !== reveal?.answer;
+          return (
+            <button
+              key={c}
+              disabled={locked || !!resolved}
+              onClick={() => p.onGeoTrivia(c)}
+              className={`px-4 py-4 rounded-xl border text-base transition disabled:cursor-not-allowed ${
+                isAnswer ? "border-sage bg-sage-soft text-sage-deep" :
+                isMyWrong ? "border-amber-400 bg-amber-100 text-amber-900" :
+                isMine ? "border-sage bg-sage-soft" :
+                locked || resolved ? "border-line bg-surface opacity-50" :
+                "border-line bg-surface hover:border-sage hover:bg-sage-soft"
+              }`}
+            >
+              {c}
+            </button>
+          );
+        })}
+      </div>
+      {!resolved && myLock != null && (
+        <p className="text-center text-sm text-muted">Locked. Waiting for opponent…</p>
+      )}
+      {resolved && reveal && (
+        <RevealCard>
+          <p className="text-sm">Answer: <span className="font-mono text-sage-deep">{reveal.answer}</span></p>
+          {reveal.explanation && <p className="text-xs text-muted italic">{reveal.explanation}</p>}
+          <WinLoseLine winner={resolved.winnerSocketId} mySocketId={resolved.mySocketId} />
         </RevealCard>
       )}
     </div>
