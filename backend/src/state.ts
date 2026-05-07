@@ -65,6 +65,9 @@ export const users = new Map<SocketId, UserInfo>();
 export const queues = new Map<string, SocketId[]>();
 export const rooms = new Map<RoomId, Room>();
 export const deviceSockets = new Map<DeviceId, Set<SocketId>>();
+// Hot in-memory cache of last status per device. Persisted to Postgres
+// (device_last_status table) so a Render cold-start doesn't blank the
+// badge — see setLastStatus / getLastStatus below.
 export const deviceLastStatus = new Map<DeviceId, LastAgentStatus>();
 export const games = new Map<GameId, Game>();
 // Quick lookup: roomId -> gameId, for the disconnect/leave flow.
@@ -118,8 +121,49 @@ export function getSocketsForDevice(deviceId: DeviceId): SocketId[] {
 
 export function setLastStatus(deviceId: DeviceId, status: LastAgentStatus) {
   deviceLastStatus.set(deviceId, status);
+  // Best-effort persist; never block the caller. Even if the DB write fails
+  // the in-memory cache still serves until the dyno sleeps.
+  void persistLastStatus(deviceId, status).catch((err) => {
+    console.error("[device_last_status] persist failed", (err as Error).message);
+  });
 }
 
-export function getLastStatus(deviceId: DeviceId): LastAgentStatus | undefined {
-  return deviceLastStatus.get(deviceId);
+async function persistLastStatus(deviceId: DeviceId, status: LastAgentStatus) {
+  // Lazy import to avoid a circular at module-load time.
+  const { query } = await import("./db/index.js");
+  await query(
+    `insert into device_last_status (device_id, status, client, ts_ms)
+     values ($1, $2, $3, $4)
+     on conflict (device_id) do update set
+       status = excluded.status,
+       client = excluded.client,
+       ts_ms = excluded.ts_ms,
+       updated_at = now()`,
+    [deviceId, status.status, status.client, status.timestamp],
+  );
+}
+
+// Returns the last status for a device. Memory first; falls back to Postgres
+// if the in-memory cache is empty (e.g. after a Render cold-start).
+export async function getLastStatus(deviceId: DeviceId): Promise<LastAgentStatus | undefined> {
+  const cached = deviceLastStatus.get(deviceId);
+  if (cached) return cached;
+  try {
+    const { query } = await import("./db/index.js");
+    const r = await query<{ status: string; client: string; ts_ms: string }>(
+      `select status, client, ts_ms from device_last_status where device_id = $1`,
+      [deviceId],
+    );
+    if (!r.rows[0]) return undefined;
+    const restored: LastAgentStatus = {
+      status: r.rows[0].status,
+      client: r.rows[0].client,
+      timestamp: Number(r.rows[0].ts_ms),
+    };
+    deviceLastStatus.set(deviceId, restored);
+    return restored;
+  } catch (err) {
+    console.error("[device_last_status] lookup failed", (err as Error).message);
+    return undefined;
+  }
 }
