@@ -7,11 +7,14 @@ import {
   getQueue,
   removeFromQueue,
   removeFromAllQueues,
+  registerDeviceSocket,
+  unregisterDeviceSocket,
   type UserInfo,
   type Room,
 } from "./state.js";
 
 const MAX_MESSAGE_LEN = 500;
+const DEVICE_ID_PATTERN = /^[a-f0-9-]{8,64}$/i;
 
 export function registerSocketHandlers(io: Server) {
   io.on("connection", (socket: Socket) => {
@@ -21,6 +24,7 @@ export function registerSocketHandlers(io: Server) {
       handle,
       tag: null,
       roomId: null,
+      deviceId: null,
       blocked: new Set(),
     };
     users.set(socket.id, me);
@@ -28,18 +32,25 @@ export function registerSocketHandlers(io: Server) {
     socket.emit("welcome", { handle, socketId: socket.id });
     log("connected", { socketId: socket.id, handle });
 
+    socket.on("register_device", (payload: { deviceId?: string }) => {
+      const deviceId = (payload?.deviceId || "").toString().trim();
+      if (!DEVICE_ID_PATTERN.test(deviceId)) {
+        return socket.emit("error_message", { message: "Invalid device id." });
+      }
+      me.deviceId = deviceId;
+      registerDeviceSocket(deviceId, socket.id);
+      log("device_registered", { socketId: socket.id, deviceId: deviceId.slice(0, 8) });
+    });
+
     socket.on("join_queue", (payload: { tag?: string }) => {
       const tag = (payload?.tag || "").toString().trim();
       if (!tag) return socket.emit("error_message", { message: "Missing tag." });
       if (me.roomId) return socket.emit("error_message", { message: "Already in a room." });
 
-      // Already in this queue? no-op.
       removeFromAllQueues(socket.id);
       me.tag = tag;
 
       const queue = getQueue(tag);
-
-      // Pop the first compatible peer (not blocked either way, not us).
       const peerIdx = queue.findIndex((peerId) => {
         if (peerId === socket.id) return false;
         const peer = users.get(peerId);
@@ -87,8 +98,6 @@ export function registerSocketHandlers(io: Server) {
       if (body.length > MAX_MESSAGE_LEN) {
         return socket.emit("error_message", { message: `Message too long (max ${MAX_MESSAGE_LEN}).` });
       }
-
-      // Forward to room. NOTE: we do NOT log message body — only metadata.
       socket.to(me.roomId).emit("chat_message", {
         from: me.handle,
         body,
@@ -119,6 +128,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("disconnect", () => {
       removeFromAllQueues(socket.id);
+      unregisterDeviceSocket(socket.id);
       if (me.roomId) leaveRoom(socket, me, "disconnected");
       users.delete(socket.id);
       log("disconnected", { socketId: socket.id, handle });
@@ -136,7 +146,6 @@ function leaveRoom(socket: Socket, me: UserInfo, reason: "left" | "disconnected"
   socket.to(roomId).emit("peer_left", { reason });
   socket.leave(roomId);
 
-  // Clear other members' room pointer too (this is a 2-person chat).
   for (const memberId of room.members) {
     if (memberId === socket.id) continue;
     const other = users.get(memberId);
@@ -147,6 +156,5 @@ function leaveRoom(socket: Socket, me: UserInfo, reason: "left" | "disconnected"
 }
 
 function log(event: string, data: Record<string, unknown>) {
-  // Stays out of message bodies. Useful for local debugging.
   console.log(`[${new Date().toISOString()}] ${event}`, JSON.stringify(data));
 }

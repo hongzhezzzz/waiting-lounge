@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { TagSelector } from "@/components/TagSelector";
 import { ModeSelector } from "@/components/ModeSelector";
-import { AgentStatusBadge } from "@/components/AgentStatusBadge";
 import { MOODS, type Tag, type Mood } from "@/lib/fakeData";
 
 export default function JoinPage() {
@@ -25,9 +24,8 @@ export default function JoinPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
-      <div className="flex items-center justify-between mb-6">
+      <div className="mb-6">
         <h1 className="text-2xl font-medium text-ink">Claude is working. What kind of wait is this?</h1>
-        <AgentStatusBadge status="waiting" />
       </div>
 
       <section className="space-y-3 mb-8">

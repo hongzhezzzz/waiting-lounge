@@ -1,17 +1,15 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { MessageBoard } from "@/components/MessageBoard";
-import { ClaudeNeedsYouOverlay } from "@/components/ClaudeNeedsYouOverlay";
-import { AgentStatusBadge, type AgentStatus } from "@/components/AgentStatusBadge";
+import { useAgentStatus } from "@/lib/agentStatus";
 
 function BoardPageInner() {
   const params = useSearchParams();
   const initialTag = params.get("tag") || undefined;
-  const [alertOpen, setAlertOpen] = useState(false);
-  const [status, setStatus] = useState<AgentStatus>("waiting");
+  const { simulate } = useAgentStatus();
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-8">
@@ -25,29 +23,16 @@ function BoardPageInner() {
             Short, anonymous, vanishes in 24 hours. No code, no secrets.
           </p>
         </div>
-        <AgentStatusBadge status={status} />
       </div>
 
       <MessageBoard initialTag={initialTag} />
 
       <button
-        onClick={() => {
-          setStatus("needs_attention");
-          setAlertOpen(true);
-        }}
+        onClick={() => simulate("needs_attention")}
         className="fixed bottom-6 right-6 rounded-full bg-amber text-white shadow-soft px-4 py-2 text-sm font-medium hover:bg-amber/90 transition"
       >
         ▶ demo Claude-needs-you alert
       </button>
-
-      <ClaudeNeedsYouOverlay
-        open={alertOpen}
-        onClose={() => {
-          setAlertOpen(false);
-          setStatus("done");
-        }}
-        onSnooze={() => setAlertOpen(false)}
-      />
     </div>
   );
 }

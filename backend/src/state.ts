@@ -3,12 +3,14 @@
 export type SocketId = string;
 export type RoomId = string;
 export type PostId = string;
+export type DeviceId = string;
 
 export type UserInfo = {
   socketId: SocketId;
   handle: string;
   tag: string | null;
   roomId: RoomId | null;
+  deviceId: DeviceId | null;
   blocked: Set<string>;
 };
 
@@ -33,6 +35,7 @@ export const users = new Map<SocketId, UserInfo>();
 export const queues = new Map<string, SocketId[]>();
 export const rooms = new Map<RoomId, Room>();
 export const boardPosts = new Map<PostId, BoardPost>();
+export const deviceSockets = new Map<DeviceId, Set<SocketId>>();
 
 export function getQueue(tag: string): SocketId[] {
   let q = queues.get(tag);
@@ -66,4 +69,27 @@ export function sweepExpiredPosts(now = Date.now()): number {
     }
   }
   return removed;
+}
+
+export function registerDeviceSocket(deviceId: DeviceId, socketId: SocketId) {
+  let set = deviceSockets.get(deviceId);
+  if (!set) {
+    set = new Set();
+    deviceSockets.set(deviceId, set);
+  }
+  set.add(socketId);
+}
+
+export function unregisterDeviceSocket(socketId: SocketId) {
+  for (const [deviceId, set] of deviceSockets) {
+    if (set.delete(socketId) && set.size === 0) {
+      deviceSockets.delete(deviceId);
+    }
+  }
+}
+
+export function getSocketsForDevice(deviceId: DeviceId): SocketId[] {
+  const set = deviceSockets.get(deviceId);
+  if (!set) return [];
+  return Array.from(set);
 }

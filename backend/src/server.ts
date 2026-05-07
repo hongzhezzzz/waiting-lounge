@@ -4,6 +4,7 @@ import cors from "cors";
 import { Server } from "socket.io";
 import { registerSocketHandlers } from "./sockets.js";
 import { createBoardRouter } from "./routes/board.js";
+import { createAgentEventRouter } from "./routes/agentEvent.js";
 import { sweepExpiredPosts, boardPosts } from "./state.js";
 
 const PORT = Number(process.env.PORT || 4000);
@@ -27,9 +28,10 @@ const io = new Server(server, {
   cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST"] },
 });
 
+app.use("/api/agent-event", createAgentEventRouter(io));
+
 registerSocketHandlers(io);
 
-// Sweep expired posts every 5 minutes.
 setInterval(() => {
   const removed = sweepExpiredPosts();
   if (removed > 0) {
@@ -37,7 +39,6 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-// Seed two welcome posts so the board isn't empty on first visit.
 seedBoard();
 
 server.listen(PORT, () => {
