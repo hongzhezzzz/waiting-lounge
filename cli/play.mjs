@@ -13,6 +13,7 @@
 // ESM because ink v5 is ESM-only. JSX is intentionally avoided
 // (no build step) — `h(Component, props, ...children)` instead.
 
+import fs from "node:fs";
 import { render, Box, Text, useApp, useInput } from "ink";
 import { createElement as h, useEffect, useReducer, useRef } from "react";
 import { io } from "socket.io-client";
@@ -31,6 +32,16 @@ import { ChickenRound } from "./components/rounds/Chicken.mjs";
 import { BigORound } from "./components/rounds/BigO.mjs";
 import { GeoTriviaRound } from "./components/rounds/GeoTrivia.mjs";
 import { StockDirectionRound } from "./components/rounds/StockDirection.mjs";
+
+// CLI flags. --dock switches the App into dock-mode rendering
+// (height-conditional CollapsedStrip vs full UI; wired in commit 5).
+// --write-state-to=<path> writes a JSON snapshot on every state change
+// so other tools (Claude Code statusline in 6b) can read live state.
+const DOCK_MODE = process.argv.includes("--dock");
+const STATE_FILE = (() => {
+  const arg = process.argv.find((a) => a && a.startsWith("--write-state-to="));
+  return arg ? arg.slice("--write-state-to=".length) : null;
+})();
 
 const initialState = {
   appPhase: "auth",      // auth|pairing|connecting|lobby|searching|in_match|match_end|error
@@ -441,6 +452,33 @@ function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Stage 6a: write a state snapshot on every change for the statusline
+  // integration in 6b. Atomic write (.tmp + rename) so a concurrent
+  // reader never sees torn JSON. Swallow errors — never crash the
+  // lounge over a write failure.
+  useEffect(() => {
+    if (!STATE_FILE) return;
+    const snapshot = {
+      handle: state.myHandle,
+      email: state.email,
+      appPhase: state.appPhase,
+      roundLabel: state.round ? `R${state.round.round}/${state.round.total}` : null,
+      roundType: state.round?.type ?? null,
+      betSecondsLeft: state.betSecondsLeft,
+      peerHandle: state.match?.peerHandle ?? null,
+      reconnecting: state.reconnecting,
+      ts: Date.now(),
+    };
+    try {
+      const tmp = `${STATE_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(snapshot));
+      fs.renameSync(tmp, STATE_FILE);
+    } catch {
+      // Intentionally swallowed — the lounge must not crash because
+      // a sibling process (or path) made the snapshot write fail.
+    }
+  }, [state]);
 
   // -------- render --------
   // Cap the top-level Box to terminal height with overflow:"hidden"
