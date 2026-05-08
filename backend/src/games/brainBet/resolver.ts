@@ -100,6 +100,42 @@ const ROUNDS_BY_DURATION: Record<GameDuration, number> = {
   10: 10,
 };
 
+// ---------- iterative-betting (Brain Bet 2.0) ----------
+//
+// Each match: 1000-chip running stack per player. Each round opens with
+// a forced 50-chip ante from each player (so folders still bleed). The
+// bet phase runs simultaneously for BET_PHASE_MS — both players pick
+// one action; if either times out, treat as fold. Pot allocation:
+//   - both fold: chips disappear (house keeps the antes)
+//   - one folds: opponent takes the pot
+//   - neither folds: play the answer phase; round winner takes the pot
+// Match ends as soon as ANY of these is true:
+//   - either chip stack hits 0 (bust → opponent wins),
+//   - the wall-clock duration elapses,
+//   - all rounds in ROUNDS_BY_DURATION are played.
+// In all cases, the chip-stack leader at end-of-match is passed to the
+// existing settleGame() — the platform 100-pt ante / 200-pt pot is
+// unchanged. Chip stacks live only in this resolver's state.
+const INITIAL_CHIP_STACK = 1000;
+const FORCED_ANTE = 50;
+const BET_PHASE_MS = 8_000;
+
+type BetActionType = "check" | "raise_25" | "raise_50" | "raise_100" | "all_in" | "fold";
+const BET_RAISE_AMOUNT: Record<Exclude<BetActionType, "all_in" | "fold">, number> = {
+  check: 0,
+  raise_25: 25,
+  raise_50: 50,
+  raise_100: 100,
+};
+
+type BetAction = {
+  type: BetActionType;
+  // Voluntary chips committed beyond the 50 forced ante. For all_in,
+  // this is whatever the player had left after the forced ante.
+  raise: number;
+};
+type RoundPhase = "reveal" | "bet" | "answer" | "showdown";
+
 // ---------- per-round-type state shapes ----------
 
 type IndianPokerState = {
@@ -166,6 +202,13 @@ type Round = {
   resolved: boolean;
   winnerSocketId: SocketId | null;
   state: RoundState;
+  // Iterative betting layer (Brain Bet 2.0)
+  phase: RoundPhase;
+  // Chips currently in the pot — antes + raises. Folders contribute
+  // their forced ante; non-folders contribute their forced ante + raise.
+  pot: number;
+  // Voluntary bet actions per player, set during the bet phase.
+  bets: Record<SocketId, BetAction | undefined>;
 };
 
 type State = {
@@ -178,6 +221,12 @@ type State = {
   usedMontyIds: Set<string>;
   usedGeoIds: Set<string>;
   usedStockIds: Set<string>;
+  // Running chip stack per player. Initialized to INITIAL_CHIP_STACK
+  // and updated at end-of-round based on bet outcome.
+  chipStacks: Record<SocketId, number>;
+  // Phase timers. betPhaseTimer fires if both players haven't submitted
+  // a bet action within BET_PHASE_MS — auto-folds the laggers.
+  betPhaseTimer: NodeJS.Timeout | null;
   roundTimer: NodeJS.Timeout | null;
   postRoundTimer: NodeJS.Timeout | null;
   disconnectTimers: Record<SocketId, NodeJS.Timeout>;
@@ -190,7 +239,11 @@ export class BrainBetGame implements GameRunner {
   constructor(private game: Game, private io: Server) {
     const totalRounds = ROUNDS_BY_DURATION[game.durationMin] ?? 3;
     const scores: Record<SocketId, number> = {};
-    for (const p of game.players) scores[p.socketId] = 0;
+    const chipStacks: Record<SocketId, number> = {};
+    for (const p of game.players) {
+      scores[p.socketId] = 0;
+      chipStacks[p.socketId] = INITIAL_CHIP_STACK;
+    }
     this.state = {
       scores,
       totalRounds,
@@ -201,6 +254,8 @@ export class BrainBetGame implements GameRunner {
       usedMontyIds: new Set(),
       usedGeoIds: new Set(),
       usedStockIds: new Set(),
+      chipStacks,
+      betPhaseTimer: null,
       roundTimer: null,
       postRoundTimer: null,
       disconnectTimers: {},
@@ -228,6 +283,13 @@ export class BrainBetGame implements GameRunner {
   private emitRoundStartTo(round: Round, socketId: SocketId): void {
     const base = {
       gameId: this.game.id,
+      // Brain Bet 2.0 fields — clients use these to render the chip
+      // stack bar and the bet-phase UI. The phase tells the client
+      // whether to show the answer UI (phase=answer), the bet UI
+      // (phase=bet), or just the round preview (phase=reveal).
+      phase: round.phase,
+      pot: round.pot,
+      chipStacks: this.publicChipStacks(),
       type: "round_start" as const,
       round: round.index,
       total: round.total,
@@ -308,10 +370,15 @@ export class BrainBetGame implements GameRunner {
       total: this.state.totalRounds,
       type,
       startedAt: now,
-      endsAt: now + ROUND_TIMEOUT_MS[type],
+      // endsAt is set when the answer phase opens (depends on round type).
+      // During reveal/bet, it's a placeholder so the type stays Round.
+      endsAt: now + BET_PHASE_MS + ROUND_TIMEOUT_MS[type],
       resolved: false,
       winnerSocketId: null,
       state: roundState,
+      phase: "reveal",
+      pot: 0,
+      bets: {},
     };
     this.state.currentRound = round;
 
@@ -323,8 +390,125 @@ export class BrainBetGame implements GameRunner {
       this.emitRoundStartTo(round, p.socketId);
     }
 
+    // Brief reveal pause (clients render the round, see chip stacks),
+    // then open the bet phase.
+    if (this.state.betPhaseTimer) clearTimeout(this.state.betPhaseTimer);
+    this.state.betPhaseTimer = setTimeout(() => this.openBetPhase(round), 1200);
+  }
+
+  private openBetPhase(round: Round) {
+    if (this.game.resolved || round.resolved || round !== this.state.currentRound) return;
+    // Deduct the forced ante from each player's chip stack (capped at
+    // whatever they have — if the stack is below 50, take all of it).
+    for (const p of this.game.players) {
+      const taken = Math.min(this.state.chipStacks[p.socketId] ?? 0, FORCED_ANTE);
+      this.state.chipStacks[p.socketId] = (this.state.chipStacks[p.socketId] ?? 0) - taken;
+      round.pot += taken;
+    }
+    round.phase = "bet";
+    this.io.to(this.game.roomId).emit("game_state_update", {
+      gameId: this.game.id,
+      type: "phase_change",
+      phase: "bet",
+      betWindowMs: BET_PHASE_MS,
+      pot: round.pot,
+      chipStacks: this.publicChipStacks(),
+    });
+    if (this.state.betPhaseTimer) clearTimeout(this.state.betPhaseTimer);
+    this.state.betPhaseTimer = setTimeout(() => this.closeBetPhase(round), BET_PHASE_MS);
+  }
+
+  // Records a player's bet and, if both players have submitted, advances
+  // to the answer phase (or directly to showdown if anyone folded).
+  private handleBetAction(round: Round, socketId: SocketId, bet: BetAction) {
+    if (round.bets[socketId] != null) return; // duplicate
+    const stackBefore = this.state.chipStacks[socketId] ?? 0;
+    let raise = 0;
+    if (bet.type === "all_in") {
+      raise = stackBefore;
+    } else if (bet.type === "raise_25" || bet.type === "raise_50" || bet.type === "raise_100") {
+      const want = BET_RAISE_AMOUNT[bet.type];
+      if (stackBefore < want) return; // not enough — UI should have hidden the option
+      raise = want;
+    } else if (bet.type === "check" || bet.type === "fold") {
+      raise = 0;
+    } else {
+      return; // invalid bet type
+    }
+    this.state.chipStacks[socketId] = stackBefore - raise;
+    round.pot += raise;
+    round.bets[socketId] = { type: bet.type, raise };
+    // Private confirmation to the better; the public phase_change will
+    // come at close time so opponents don't see your bet during the bet
+    // window itself.
+    this.io.to(socketId).emit("game_state_update", {
+      gameId: this.game.id,
+      type: "bet_recorded",
+      bet: round.bets[socketId],
+      chipStack: this.state.chipStacks[socketId],
+      pot: round.pot,
+    });
+    // Both players bet — close immediately.
+    if (this.game.players.every((p) => round.bets[p.socketId] != null)) {
+      this.closeBetPhase(round);
+    }
+  }
+
+  private closeBetPhase(round: Round) {
+    if (this.game.resolved || round.resolved || round !== this.state.currentRound) return;
+    if (round.phase !== "bet") return;
+    if (this.state.betPhaseTimer) {
+      clearTimeout(this.state.betPhaseTimer);
+      this.state.betPhaseTimer = null;
+    }
+    // Auto-fold any player who didn't submit before the window closed.
+    for (const p of this.game.players) {
+      if (round.bets[p.socketId] == null) {
+        round.bets[p.socketId] = { type: "fold", raise: 0 };
+      }
+    }
+    const folders = this.game.players.filter((p) => round.bets[p.socketId]?.type === "fold");
+    // Reveal both bets to both players now that the window is closed.
+    this.io.to(this.game.roomId).emit("game_state_update", {
+      gameId: this.game.id,
+      type: "bet_phase_closed",
+      bets: this.game.players.reduce(
+        (acc, p) => {
+          acc[p.socketId] = round.bets[p.socketId]!;
+          return acc;
+        },
+        {} as Record<SocketId, BetAction>,
+      ),
+      pot: round.pot,
+      chipStacks: this.publicChipStacks(),
+    });
+    if (folders.length === 2) {
+      // Both fold — chips disappear (house keeps the antes). No answer
+      // phase, no winner. Pot is consumed.
+      this.finishRound(round, null, { kind: "fold_resolved", reason: "both_folded" });
+      return;
+    }
+    if (folders.length === 1) {
+      const winner = this.game.players.find((p) => round.bets[p.socketId]?.type !== "fold")!;
+      this.finishRound(round, winner.socketId, { kind: "fold_resolved", reason: "one_folded" });
+      return;
+    }
+    this.openAnswerPhase(round);
+  }
+
+  private openAnswerPhase(round: Round) {
+    if (this.game.resolved || round.resolved || round !== this.state.currentRound) return;
+    round.phase = "answer";
+    const now = Date.now();
+    round.endsAt = now + ROUND_TIMEOUT_MS[round.type];
+    this.io.to(this.game.roomId).emit("game_state_update", {
+      gameId: this.game.id,
+      type: "phase_change",
+      phase: "answer",
+      endsAt: round.endsAt,
+    });
     if (this.state.roundTimer) clearTimeout(this.state.roundTimer);
-    this.state.roundTimer = setTimeout(() => this.timeoutRound(), ROUND_TIMEOUT_MS[type]);
+    this.state.roundTimer = setTimeout(() => this.timeoutRound(), ROUND_TIMEOUT_MS[round.type]);
   }
 
   private pickRoundType(): RoundType {
@@ -392,6 +576,29 @@ export class BrainBetGame implements GameRunner {
     if (!round || round.resolved) return;
     const a = action as { type?: string; choice?: string; value?: number };
     if (!a) return;
+
+    // Bet-phase actions are routed separately from answer-phase actions.
+    // This is the central guard that protects the iterative-betting
+    // invariant: bets MUST be locked in before the answer is revealed.
+    if (a.type === "bet") {
+      if (round.phase !== "bet") return;
+      const choice = (a.choice || "").toString() as BetActionType;
+      if (
+        choice !== "check" &&
+        choice !== "raise_25" &&
+        choice !== "raise_50" &&
+        choice !== "raise_100" &&
+        choice !== "all_in" &&
+        choice !== "fold"
+      ) return;
+      if (!this.game.players.some((p) => p.socketId === socketId)) return;
+      this.handleBetAction(round, socketId, { type: choice, raise: 0 });
+      return;
+    }
+
+    // Every other action belongs to the answer phase. Reject if the
+    // round hasn't transitioned out of reveal/bet yet.
+    if (round.phase !== "answer") return;
 
     if (round.type === "indian_poker" && a.type === "indian_poker_decide") {
       const ip = round.state as IndianPokerState;
@@ -665,11 +872,39 @@ export class BrainBetGame implements GameRunner {
   private finishRound(round: Round, winnerSocketId: SocketId | null, reveal: Record<string, unknown>) {
     if (round.resolved) return;
     round.resolved = true;
+    round.phase = "showdown";
     round.winnerSocketId = winnerSocketId;
     if (this.state.roundTimer) clearTimeout(this.state.roundTimer);
+    if (this.state.betPhaseTimer) clearTimeout(this.state.betPhaseTimer);
 
+    // Legacy round-win counter — kept so frontends that still display
+    // "round score" continue to work. Final winner is chip leader.
     if (winnerSocketId) {
       this.state.scores[winnerSocketId] = (this.state.scores[winnerSocketId] || 0) + 1;
+    }
+
+    // Pot allocation. Chips were already debited from stacks when the
+    // forced ante / raises hit the pot. Here we transfer the pot back
+    // out to the winner (or split on tie, or zero-out on both-folded).
+    const bothFolded = this.game.players.every((p) => round.bets[p.socketId]?.type === "fold");
+    const chipDelta: Record<SocketId, number> = {};
+    for (const p of this.game.players) chipDelta[p.socketId] = 0;
+    if (bothFolded) {
+      // House keeps the antes — chips disappear from the system. No
+      // delta to record; the pot just evaporates.
+    } else if (winnerSocketId) {
+      this.state.chipStacks[winnerSocketId] = (this.state.chipStacks[winnerSocketId] || 0) + round.pot;
+      chipDelta[winnerSocketId] = round.pot;
+    } else {
+      // Tie (no winner) — split pot evenly. Any odd chip goes to the
+      // first player by socketId order; trivial fairness call.
+      const half = Math.floor(round.pot / 2);
+      const remainder = round.pot - half * 2;
+      const [a, b] = this.game.players;
+      this.state.chipStacks[a.socketId] = (this.state.chipStacks[a.socketId] || 0) + half + remainder;
+      this.state.chipStacks[b.socketId] = (this.state.chipStacks[b.socketId] || 0) + half;
+      chipDelta[a.socketId] = half + remainder;
+      chipDelta[b.socketId] = half;
     }
 
     this.io.to(this.game.roomId).emit("game_state_update", {
@@ -679,9 +914,28 @@ export class BrainBetGame implements GameRunner {
       round: round.index,
       total: round.total,
       scores: this.publicScores(),
+      chipStacks: this.publicChipStacks(),
+      chipDelta,
+      pot: round.pot,
       winnerSocketId,
       reveal,
     });
+
+    // Bust: if anyone is at zero chips, end the match immediately.
+    const survivor = this.game.players.find((p) => (this.state.chipStacks[p.socketId] || 0) > 0);
+    const allBust = this.game.players.every((p) => (this.state.chipStacks[p.socketId] || 0) <= 0);
+    if (allBust) {
+      // Edge case: both went to zero on the same round. Tie at the
+      // table; settle the platform pot as a tie.
+      if (this.state.postRoundTimer) clearTimeout(this.state.postRoundTimer);
+      this.state.postRoundTimer = setTimeout(() => this.endGame(null, "bust_tie"), POST_ROUND_PAUSE_MS);
+      return;
+    }
+    if (survivor && this.game.players.some((p) => (this.state.chipStacks[p.socketId] || 0) <= 0)) {
+      if (this.state.postRoundTimer) clearTimeout(this.state.postRoundTimer);
+      this.state.postRoundTimer = setTimeout(() => this.endGame(survivor.socketId, "bust"), POST_ROUND_PAUSE_MS);
+      return;
+    }
 
     if (this.state.postRoundTimer) clearTimeout(this.state.postRoundTimer);
     this.state.postRoundTimer = setTimeout(() => {
@@ -750,18 +1004,28 @@ export class BrainBetGame implements GameRunner {
     this.game.resolved = true;
     if (this.state.roundTimer) clearTimeout(this.state.roundTimer);
     if (this.state.postRoundTimer) clearTimeout(this.state.postRoundTimer);
+    if (this.state.betPhaseTimer) clearTimeout(this.state.betPhaseTimer);
     for (const t of Object.values(this.state.disconnectTimers)) clearTimeout(t);
 
     let winnerSocketId: SocketId | null;
     if (forcedWinnerSocketId !== undefined) {
       winnerSocketId = forcedWinnerSocketId;
     } else {
+      // Iterative-betting Brain Bet: chip-stack leader wins. Falls back
+      // to the legacy round-win count on a chip-stack tie (rare but
+      // possible after a clean sweep of zero-raise rounds).
       const [a, b] = this.game.players;
-      const aScore = this.state.scores[a.socketId] || 0;
-      const bScore = this.state.scores[b.socketId] || 0;
-      if (aScore > bScore) winnerSocketId = a.socketId;
-      else if (bScore > aScore) winnerSocketId = b.socketId;
-      else winnerSocketId = null;
+      const aChips = this.state.chipStacks[a.socketId] || 0;
+      const bChips = this.state.chipStacks[b.socketId] || 0;
+      if (aChips > bChips) winnerSocketId = a.socketId;
+      else if (bChips > aChips) winnerSocketId = b.socketId;
+      else {
+        const aScore = this.state.scores[a.socketId] || 0;
+        const bScore = this.state.scores[b.socketId] || 0;
+        if (aScore > bScore) winnerSocketId = a.socketId;
+        else if (bScore > aScore) winnerSocketId = b.socketId;
+        else winnerSocketId = null;
+      }
     }
     const winnerUserId =
       winnerSocketId == null
@@ -795,6 +1059,7 @@ export class BrainBetGame implements GameRunner {
       gameId: this.game.id,
       reason,
       scores: this.publicScores(),
+      chipStacks: this.publicChipStacks(),
       winnerSocketId,
       winnerUserId,
       outcome: settle.outcome,
@@ -811,6 +1076,7 @@ export class BrainBetGame implements GameRunner {
     this.game.resolved = true;
     if (this.state.roundTimer) clearTimeout(this.state.roundTimer);
     if (this.state.postRoundTimer) clearTimeout(this.state.postRoundTimer);
+    if (this.state.betPhaseTimer) clearTimeout(this.state.betPhaseTimer);
     for (const t of Object.values(this.state.disconnectTimers)) clearTimeout(t);
 
     try {
@@ -834,6 +1100,14 @@ export class BrainBetGame implements GameRunner {
     games.delete(this.game.id);
     roomGame.delete(this.game.roomId);
     liveRunners.delete(this.game.id);
+  }
+
+  private publicChipStacks(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const p of this.game.players) {
+      out[p.socketId] = this.state.chipStacks[p.socketId] || 0;
+    }
+    return out;
   }
 
   private publicScores(): Record<string, number> {

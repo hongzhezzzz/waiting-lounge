@@ -11,11 +11,32 @@ export type BrainBetRoundType =
   | "geo_trivia"
   | "stock_direction";
 
+export type BrainBetPhase = "reveal" | "bet" | "answer" | "showdown";
+
+export type BetActionType =
+  | "check"
+  | "raise_25"
+  | "raise_50"
+  | "raise_100"
+  | "all_in"
+  | "fold";
+
 export type BrainBetRoundView = {
   round: number;
   total: number;
   endsAt: number;
   scores: Record<string, number>;
+  // Iterative-betting fields. Server emits these on round_start +
+  // phase_change. The chip stacks update at every phase boundary;
+  // myBet / peerBet stay null until the bet phase closes.
+  phase: BrainBetPhase;
+  pot: number;
+  chipStacks: Record<string, number>;
+  betWindowEndsAt: number | null;
+  myBet: { type: BetActionType; raise: number } | null;
+  peerBet: { type: BetActionType; raise: number } | null;
+  mySocketId: string | null;
+  peerSocketId: string | null;
   myHandle: string | null;
   peerHandle: string | null;
   roundType: BrainBetRoundType;
@@ -27,6 +48,7 @@ export type BrainBetRoundView = {
     mySocketId: string | null;
   };
   // dispatchers
+  onBet: (choice: BetActionType) => void;
   onIndianPoker: (choice: "bet" | "fold") => void;
   onEstimation: (value: number) => void;
   onChicken: (value: number) => void;
@@ -42,7 +64,19 @@ export function BrainBetRound(p: BrainBetRoundView) {
     const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
   }, []);
-  const remaining = Math.max(0, Math.ceil((p.endsAt - now) / 1000));
+
+  // Phase-aware countdown. During "bet" we show the bet-window timer;
+  // during "answer" we show the round timer; in reveal/showdown nothing.
+  const phaseEndsAt = p.phase === "bet" ? p.betWindowEndsAt : p.phase === "answer" ? p.endsAt : null;
+  const remaining = phaseEndsAt != null ? Math.max(0, Math.ceil((phaseEndsAt - now) / 1000)) : 0;
+  const phaseLabel =
+    p.phase === "reveal" ? "starting" :
+    p.phase === "bet" ? "place your bet" :
+    p.phase === "answer" ? "answer" :
+    "showdown";
+
+  const myStack = p.mySocketId ? p.chipStacks[p.mySocketId] ?? 0 : 0;
+  const peerStack = p.peerSocketId ? p.chipStacks[p.peerSocketId] ?? 0 : 0;
 
   const ribbon = (
     <div className="flex items-center justify-between text-sm mb-3">
@@ -52,47 +86,170 @@ export function BrainBetRound(p: BrainBetRoundView) {
         <span className="ml-2 text-xs uppercase tracking-wider text-muted">
           {labelFor(p.roundType)}
         </span>
-      </span>
-      <span className="text-muted">
-        {p.myHandle && (
-          <>
-            <span className="font-mono text-ink">{p.myHandle}</span>{" "}
-            <span className="font-mono text-sage-deep">{p.scores[p.myHandle] ?? 0}</span>
-          </>
-        )}
-        <span className="mx-2">·</span>
-        {p.peerHandle && (
-          <>
-            <span className="font-mono text-ink">{p.peerHandle}</span>{" "}
-            <span className="font-mono text-sage-deep">{p.scores[p.peerHandle] ?? 0}</span>
-          </>
-        )}
+        <span className="ml-3 text-xs uppercase tracking-wider text-sage-deep">
+          {phaseLabel}
+        </span>
       </span>
       <span className="font-mono text-sm">
-        {p.resolved ? (
-          <span className="text-muted">resolved</span>
+        {phaseEndsAt != null && !p.resolved ? (
+          <span className={remaining <= 3 ? "text-amber-700" : "text-ink"}>{remaining}s</span>
         ) : (
-          <span className={remaining <= 5 ? "text-amber-700" : "text-ink"}>{remaining}s</span>
+          <span className="text-muted">{p.resolved ? "resolved" : "—"}</span>
         )}
       </span>
     </div>
   );
 
+  // Disable answer-phase action handlers if we are not yet in the
+  // answer phase. The backend rejects out-of-phase actions either way;
+  // this keeps the buttons visually inactive too.
+  const canAnswer = p.phase === "answer" && !p.resolved;
+  const sub: BrainBetRoundView = canAnswer ? p : {
+    ...p,
+    onIndianPoker: () => {},
+    onEstimation: () => {},
+    onChicken: () => {},
+    onBigO: () => {},
+    onMontyMirage: () => {},
+    onGeoTrivia: () => {},
+    onStockDirection: () => {},
+  };
+
   let body: React.ReactNode = null;
-  if (p.roundType === "indian_poker") body = <IndianPokerView {...p} />;
-  else if (p.roundType === "estimation") body = <EstimationView {...p} />;
-  else if (p.roundType === "chicken") body = <ChickenView {...p} />;
-  else if (p.roundType === "big_o") body = <BigOView {...p} />;
-  else if (p.roundType === "monty_mirage") body = <MontyMirageView {...p} />;
-  else if (p.roundType === "geo_trivia") body = <GeoTriviaView {...p} />;
-  else if (p.roundType === "stock_direction") body = <StockDirectionView {...p} />;
+  if (p.roundType === "indian_poker") body = <IndianPokerView {...sub} />;
+  else if (p.roundType === "estimation") body = <EstimationView {...sub} />;
+  else if (p.roundType === "chicken") body = <ChickenView {...sub} />;
+  else if (p.roundType === "big_o") body = <BigOView {...sub} />;
+  else if (p.roundType === "monty_mirage") body = <MontyMirageView {...sub} />;
+  else if (p.roundType === "geo_trivia") body = <GeoTriviaView {...sub} />;
+  else if (p.roundType === "stock_direction") body = <StockDirectionView {...sub} />;
 
   return (
-    <div>
+    <div className="space-y-4">
       {ribbon}
+      <ChipBar
+        myHandle={p.myHandle}
+        peerHandle={p.peerHandle}
+        myStack={myStack}
+        peerStack={peerStack}
+        pot={p.pot}
+      />
+      {p.phase === "bet" && !p.myBet && !p.resolved && (
+        <BetPhasePanel myStack={myStack} pot={p.pot} onBet={p.onBet} />
+      )}
+      {p.phase === "bet" && p.myBet && !p.resolved && (
+        <div className="card p-4 text-center text-sm text-muted">
+          You: <span className="font-mono text-ink">{betLabel(p.myBet.type)}</span>{p.myBet.raise > 0 ? ` (+${p.myBet.raise})` : ""}.
+          Waiting for opponent…
+        </div>
+      )}
+      {p.phase === "answer" && !p.resolved && (p.myBet || p.peerBet) && (
+        <div className="text-xs text-muted text-center">
+          Bets in. Pot: <span className="font-mono text-ink">{p.pot}</span>.
+          You {betLabel(p.myBet?.type ?? "check")}, opponent {betLabel(p.peerBet?.type ?? "check")}.
+        </div>
+      )}
       {body}
     </div>
   );
+}
+
+function ChipBar({
+  myHandle,
+  peerHandle,
+  myStack,
+  peerStack,
+  pot,
+}: {
+  myHandle: string | null;
+  peerHandle: string | null;
+  myStack: number;
+  peerStack: number;
+  pot: number;
+}) {
+  return (
+    <div className="card p-3 flex items-center justify-between text-sm">
+      <span>
+        <span className="font-mono text-ink">{myHandle ?? "you"}</span>
+        <span className="ml-2 font-mono text-sage-deep">{myStack}</span>
+        <span className="ml-1 text-xs text-muted">chips</span>
+      </span>
+      <span className="text-muted">
+        Pot: <span className="font-mono text-ink">{pot}</span>
+      </span>
+      <span>
+        <span className="font-mono text-ink">{peerHandle ?? "opponent"}</span>
+        <span className="ml-2 font-mono text-sage-deep">{peerStack}</span>
+        <span className="ml-1 text-xs text-muted">chips</span>
+      </span>
+    </div>
+  );
+}
+
+function BetPhasePanel({
+  myStack,
+  pot,
+  onBet,
+}: {
+  myStack: number;
+  pot: number;
+  onBet: (choice: BetActionType) => void;
+}) {
+  // Tier disable rules: can only raise N if you have at least N chips
+  // available. AllIn is always allowed (uses whatever you have).
+  const tiers: { type: BetActionType; label: string; need: number; primary?: boolean }[] = [
+    { type: "check", label: "Check", need: 0 },
+    { type: "raise_25", label: "Raise +25", need: 25 },
+    { type: "raise_50", label: "Raise +50", need: 50 },
+    { type: "raise_100", label: "Raise +100", need: 100 },
+    { type: "all_in", label: `All-in (${myStack})`, need: 0 },
+  ];
+  return (
+    <div className="card p-4 border-sage space-y-3">
+      <div className="text-xs uppercase tracking-wider text-muted">
+        Bet phase · pot <span className="font-mono text-ink">{pot}</span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {tiers.map((t) => {
+          const disabled = t.need > myStack;
+          return (
+            <button
+              key={t.type}
+              type="button"
+              onClick={() => !disabled && onBet(t.type)}
+              disabled={disabled}
+              className={`px-3 py-2 rounded-xl border text-sm transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                t.type === "all_in"
+                  ? "border-amber bg-amber-50 text-amber-900 hover:border-amber"
+                  : "border-line bg-surface hover:border-sage hover:bg-sage-soft/40"
+              }`}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => onBet("fold")}
+          className="px-3 py-2 rounded-xl border border-line text-muted text-sm hover:text-ink hover:border-sage transition"
+        >
+          Fold
+        </button>
+      </div>
+      <p className="text-xs text-muted">
+        Your stake goes into the pot. Winner of the round takes it.
+      </p>
+    </div>
+  );
+}
+
+function betLabel(t: BetActionType): string {
+  if (t === "check") return "checked";
+  if (t === "raise_25") return "raised 25";
+  if (t === "raise_50") return "raised 50";
+  if (t === "raise_100") return "raised 100";
+  if (t === "all_in") return "went all-in";
+  return "folded";
 }
 
 function labelFor(t: BrainBetRoundType): string {
