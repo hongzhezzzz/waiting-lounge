@@ -35,6 +35,26 @@ export async function query<T extends Record<string, unknown>>(
   return { rows: res.rows };
 }
 
+// Run a callback inside a Postgres transaction. The callback receives a
+// dedicated client; queries on that client share the transaction. Auto-
+// commits on success, rolls back on throw, and always releases the client.
+export async function withTx<T>(
+  fn: (client: pg.PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const result = await fn(client);
+    await client.query("commit");
+    return result;
+  } catch (err) {
+    try { await client.query("rollback"); } catch { /* swallow */ }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function applySchema(): Promise<void> {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const schemaPath = path.join(here, "schema.sql");
