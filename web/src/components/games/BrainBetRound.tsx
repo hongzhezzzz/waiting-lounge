@@ -124,6 +124,19 @@ export function BrainBetRound(p: BrainBetRoundView) {
   else if (p.roundType === "geo_trivia") body = <GeoTriviaView {...sub} />;
   else if (p.roundType === "stock_direction") body = <StockDirectionView {...sub} />;
 
+  // During reveal/bet, the round body's own action buttons are
+  // already neutered (no-op dispatchers). Visually de-emphasize them
+  // so the player's eye lands on the bet panel above instead of two
+  // competing rows of Bet/Fold-style buttons.
+  const dim = p.phase !== "answer" && !p.resolved;
+  if (dim) {
+    body = (
+      <div className="opacity-60 pointer-events-none select-none" aria-hidden>
+        {body}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {ribbon}
@@ -149,6 +162,13 @@ export function BrainBetRound(p: BrainBetRoundView) {
           You {betLabel(p.myBet?.type ?? "check")}, opponent {betLabel(p.peerBet?.type ?? "check")}.
         </div>
       )}
+      <FoldResolvedBanner
+        resolved={p.resolved}
+        myBet={p.myBet}
+        peerBet={p.peerBet}
+        myHandle={p.myHandle}
+        peerHandle={p.peerHandle}
+      />
       {body}
     </div>
   );
@@ -250,6 +270,46 @@ function betLabel(t: BetActionType): string {
   if (t === "raise_100") return "raised 100";
   if (t === "all_in") return "went all-in";
   return "folded";
+}
+
+function FoldResolvedBanner({
+  resolved,
+  myBet,
+  peerBet,
+  myHandle,
+  peerHandle,
+}: {
+  resolved: BrainBetRoundView["resolved"];
+  myBet: BrainBetRoundView["myBet"];
+  peerBet: BrainBetRoundView["peerBet"];
+  myHandle: string | null;
+  peerHandle: string | null;
+}) {
+  if (!resolved) return null;
+  const reveal = resolved.reveal as { kind?: string; reason?: string } | undefined;
+  if (reveal?.kind !== "fold_resolved") return null;
+  const folder =
+    myBet?.type === "fold" && peerBet?.type === "fold"
+      ? "both"
+      : myBet?.type === "fold"
+        ? "you"
+        : "opponent";
+  return (
+    <div className="card p-4 text-center text-sm border-amber bg-amber-50/40">
+      {folder === "both" ? (
+        <span>Both folded — chips reset, no winner this round.</span>
+      ) : folder === "you" ? (
+        <span>
+          You folded. <span className="font-mono text-ink">{peerHandle}</span> takes the pot.
+        </span>
+      ) : (
+        <span>
+          <span className="font-mono text-ink">{peerHandle}</span> folded. You take the pot.
+          {myHandle ? null : null}
+        </span>
+      )}
+    </div>
+  );
 }
 
 function labelFor(t: BrainBetRoundType): string {
