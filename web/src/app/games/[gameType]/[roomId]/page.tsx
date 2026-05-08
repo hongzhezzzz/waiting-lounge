@@ -359,6 +359,11 @@ export default function GameRoomPage() {
           <h1 className="text-xl font-medium text-ink">Brain Bet</h1>
           <span className="text-xs text-muted font-mono">{peerHandle ? `vs ${peerHandle}` : ""}</span>
         </header>
+        {peerHandle && peerHandle.startsWith("lounge-bot-") && (
+          <div className="mb-4 card p-3 text-xs text-amber-900 bg-amber-50/60 border-amber">
+            Bot match — no points change hands. The lounge bot is here so you have someone to play with while the room fills up.
+          </div>
+        )}
         <BrainBetRound
           round={bbRound.round}
           total={bbRound.total}
