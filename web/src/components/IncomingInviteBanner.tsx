@@ -2,11 +2,12 @@
 
 // Layout-level banner: any signed-in user, on any page, can receive a
 // game invite. Listens for incoming_invite, shows a sticky banner with
-// Accept/Decline. Auto-dismisses on invite_expired. On accept, listens
-// briefly for game_started and redirects.
+// Accept/Decline. Auto-dismisses on invite_expired or game_started.
+// Routing on accept is delegated to the layout-level <GameStartRedirect>
+// — this component used to do the redirect itself but had a stale
+// closure on the `accepting` flag that occasionally swallowed game_started.
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { getSocket } from "@/lib/socket";
 
@@ -26,7 +27,6 @@ const GAME_LABELS: Record<string, string> = {
 
 export function IncomingInviteBanner() {
   const { session } = useAuth();
-  const router = useRouter();
   const [invite, setInvite] = useState<Invite | null>(null);
   const [accepting, setAccepting] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -48,13 +48,13 @@ export function IncomingInviteBanner() {
       setInvite((i) => (i && i.inviteId === p.inviteId ? null : i));
       setAccepting(false);
     }
-    function onStarted(p: { gameId: string; roomId: string; gameType: string; peerHandle: string }) {
-      // If we accepted an invite, this is the resulting game.
-      if (accepting) {
-        router.push(`/games/${p.gameType}/${p.roomId}?gameId=${p.gameId}&peer=${encodeURIComponent(p.peerHandle)}`);
-        setAccepting(false);
-        setInvite(null);
-      }
+    function onStarted() {
+      // Any game starting (most often the one we just accepted) means
+      // this banner is no longer relevant. Clearing local state is the
+      // only job here — the layout-level <GameStartRedirect> performs
+      // the actual routing.
+      setAccepting(false);
+      setInvite(null);
     }
     socket.on("incoming_invite", onIncoming);
     socket.on("invite_expired", onExpired);
@@ -64,7 +64,7 @@ export function IncomingInviteBanner() {
       socket.off("invite_expired", onExpired);
       socket.off("game_started", onStarted);
     };
-  }, [session, router, accepting]);
+  }, [session]);
 
   if (!invite) return null;
 

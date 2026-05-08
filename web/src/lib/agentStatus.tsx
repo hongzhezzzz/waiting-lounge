@@ -5,10 +5,18 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { getSocket } from "./socket";
+
+// After the user explicitly acknowledges a `needs_attention` event
+// (clicks "Return to terminal"), suppress further `needs_attention`
+// updates for this long. Notification hooks can fire in clusters
+// during a single Claude turn; without suppression the modal would
+// re-pop the moment the user dismissed it.
+const ACKNOWLEDGE_SUPPRESS_MS = 5_000;
 
 export type AgentStatus = "waiting" | "needs_attention" | "done" | "disconnected";
 
@@ -25,6 +33,7 @@ type ContextValue = {
   simulate: (status: AgentStatus) => void;
   setDeviceId: (id: string) => void;
   clearDeviceId: () => void;
+  acknowledge: () => void;
 };
 
 const DEFAULT_META: Meta = { status: "disconnected", ts: 0, isPaired: false, source: "none" };
@@ -35,6 +44,7 @@ const Ctx = createContext<ContextValue>({
   simulate: () => {},
   setDeviceId: () => {},
   clearDeviceId: () => {},
+  acknowledge: () => {},
 });
 
 const DEVICE_KEY = "wl.deviceId";
@@ -42,6 +52,12 @@ const DEVICE_KEY = "wl.deviceId";
 export function AgentStatusProvider({ children }: { children: ReactNode }) {
   const [deviceId, setDeviceIdState] = useState<string | null>(null);
   const [meta, setMeta] = useState<Meta>(DEFAULT_META);
+  // Timestamp (ms) of the last user acknowledgement (clicking "Return
+  // to terminal"). Used to drop incoming `needs_attention` updates that
+  // arrive within ACKNOWLEDGE_SUPPRESS_MS — those are almost always
+  // duplicate Notification hooks from the same Claude turn the user
+  // already addressed.
+  const acknowledgedAtRef = useRef(0);
 
   // Hydrate deviceId from localStorage once on mount.
   useEffect(() => {
@@ -63,6 +79,15 @@ export function AgentStatusProvider({ children }: { children: ReactNode }) {
       socket.emit("register_device", { deviceId });
     }
     function onUpdate(p: { status: AgentStatus; ts?: number }) {
+      // If the user just acknowledged, ignore needs_attention bursts.
+      // Other statuses (waiting / done) still pass through immediately
+      // so a real "Claude is working" flip is visible right away.
+      if (
+        p.status === "needs_attention" &&
+        Date.now() - acknowledgedAtRef.current < ACKNOWLEDGE_SUPPRESS_MS
+      ) {
+        return;
+      }
       setMeta({
         status: p.status,
         ts: p.ts || Date.now(),
@@ -102,6 +127,20 @@ export function AgentStatusProvider({ children }: { children: ReactNode }) {
     setMeta((prev) => ({ ...prev, status, ts: Date.now(), source: "demo" }));
   }, []);
 
+  // Called when the user clicks "Return to terminal" on the modal.
+  // Flips the badge from amber to gray ("Claude may be done") right
+  // away — the assumption is that if Claude needed attention, the
+  // user has now addressed it; the next real hook event will correct
+  // this within seconds if Claude is still actively working.
+  const acknowledge = useCallback(() => {
+    acknowledgedAtRef.current = Date.now();
+    setMeta((prev) =>
+      prev.status === "needs_attention"
+        ? { ...prev, status: "done", ts: Date.now() }
+        : prev,
+    );
+  }, []);
+
   const setDeviceId = useCallback((id: string) => {
     if (typeof window !== "undefined") window.localStorage.setItem(DEVICE_KEY, id);
     setDeviceIdState(id);
@@ -115,7 +154,7 @@ export function AgentStatusProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ meta, deviceId, simulate, setDeviceId, clearDeviceId }}>
+    <Ctx.Provider value={{ meta, deviceId, simulate, setDeviceId, clearDeviceId, acknowledge }}>
       {children}
     </Ctx.Provider>
   );

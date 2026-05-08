@@ -92,6 +92,10 @@ const ROUND_TIMEOUT_MS: Record<RoundType, number> = {
   stock_direction: 30_000,
 };
 const POST_ROUND_PAUSE_MS = 3000;
+// Delay between game_started and the very first round_start so the
+// receiving clients have time to navigate to the game page and subscribe
+// to game_state_update. See start() below.
+const FIRST_ROUND_DELAY_MS = 800;
 const DISCONNECT_GRACE_MS = 10_000;
 
 const ROUNDS_BY_DURATION: Record<GameDuration, number> = {
@@ -208,7 +212,14 @@ export class BrainBetGame implements GameRunner {
   }
 
   start() {
-    this.startRound();
+    // Defer the first round_start so freshly-arriving clients have time
+    // to navigate to /games/[gameType]/[roomId] and subscribe to
+    // game_state_update before the round opens. Without this, a client
+    // mid-router-push when game_started fires can miss round_start and
+    // sit idle until the round timer ticks (up to ~30 s for some round
+    // types). 800 ms covers Next.js client-side navigation in the
+    // common case while still feeling near-instant.
+    setTimeout(() => this.startRound(), FIRST_ROUND_DELAY_MS);
   }
 
   private startRound() {
