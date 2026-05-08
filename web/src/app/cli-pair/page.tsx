@@ -232,14 +232,20 @@ function CliPairInner() {
         Authorize terminal access for{" "}
         <span className="font-mono text-ink">{session.user.email}</span>?
       </p>
-      <div className="rounded-lg border border-line bg-surface p-3 space-y-1">
-        <p className="text-xs text-muted flex items-center gap-1.5">
-          <ShieldCheck className="w-3.5 h-3.5" />
-          Code from terminal: <span className="font-mono text-ink">…{codeTail}</span>
+      <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="w-5 h-5 text-amber-700" />
+          <p className="text-sm text-amber-900 font-medium">
+            Verify the code matches your terminal
+          </p>
+        </div>
+        <p className="font-mono text-3xl font-bold tracking-widest text-center text-ink py-2 bg-white rounded border border-amber-200">
+          …{codeTail}
         </p>
-        <p className="text-xs text-muted">
-          Make sure this matches the last 6 characters shown in your terminal
-          window.
+        <p className="text-xs text-amber-900/80">
+          The last 6 characters shown in your terminal window should match the
+          large code above. If they don&apos;t, do not click Authorize — close
+          this tab and re-run <code className="font-mono">waiting-lounge play</code>.
         </p>
       </div>
       <button

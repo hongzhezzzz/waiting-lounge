@@ -54,6 +54,10 @@ const initialState = {
 
   end: null,             // game_resolved payload
   betSecondsLeft: null,
+
+  // 4e: confirm dialog (currently only "forfeit") + reconnect banner.
+  confirmDialog: null,   // null | "forfeit"
+  reconnecting: false,   // socket dropped while in_match; waiting for re-attach
 };
 
 function reducer(state, action) {
@@ -65,9 +69,19 @@ function reducer(state, action) {
     case "AUTH_ERROR":
       return { ...state, appPhase: "error", error: action.error };
     case "SOCKET_CONNECTED":
-      return { ...state, appPhase: state.appPhase === "in_match" || state.appPhase === "searching" ? state.appPhase : "lobby" };
+      return {
+        ...state,
+        appPhase: state.appPhase === "in_match" || state.appPhase === "searching" ? state.appPhase : "lobby",
+        reconnecting: false,
+      };
     case "SOCKET_DISCONNECTED":
-      return { ...state, toast: "Disconnected. Reconnecting…" };
+      // Mid-match drop → mark reconnecting (overlays the in-match scene).
+      // Pre-match drop → toast.
+      return {
+        ...state,
+        reconnecting: state.appPhase === "in_match",
+        toast: state.appPhase === "in_match" ? null : "Disconnected. Reconnecting…",
+      };
     case "WELCOME":
       return { ...state, myHandle: action.handle, mySocketId: action.socketId };
     case "TOAST":
@@ -201,6 +215,10 @@ function reducer(state, action) {
       };
     case "BET_TICK":
       return { ...state, betSecondsLeft: state.betSecondsLeft != null ? Math.max(0, state.betSecondsLeft - 1) : null };
+    case "SHOW_CONFIRM":
+      return { ...state, confirmDialog: action.dialogType };
+    case "HIDE_CONFIRM":
+      return { ...state, confirmDialog: null };
     default:
       return state;
   }
@@ -210,11 +228,32 @@ function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const sockRef = useRef(null);
   const tokenRef = useRef(null);
+  const stateRef = useRef(state);
+  // Keep ref synced with latest state for socket-event closures that
+  // were captured at mount and need to read current state.
+  stateRef.current = state;
   const { exit } = useApp();
 
   // -------- input --------
   useInput((input, key) => {
+    // Confirm dialog open: only Y/N (or Enter/Esc) is accepted.
+    if (state.confirmDialog) {
+      if (input === "y" || input === "Y" || key.return) {
+        // Forfeit confirmed — disconnect cleanly. Server's 10s grace
+        // timer expires and the opponent (or bot) wins by forfeit.
+        cleanExit(sockRef.current, exit);
+      } else if (input === "n" || input === "N" || key.escape) {
+        dispatch({ type: "HIDE_CONFIRM" });
+      }
+      return;
+    }
+
     if (input === "q" || input === "Q" || key.escape) {
+      // In-match Q triggers a forfeit confirm; everywhere else, just exit.
+      if (state.appPhase === "in_match") {
+        dispatch({ type: "SHOW_CONFIRM", dialogType: "forfeit" });
+        return;
+      }
       cleanExit(sockRef.current, exit);
       return;
     }
@@ -301,7 +340,7 @@ function App() {
           auth: { token },
         });
         sockRef.current = sock;
-        wireSocket(sock, dispatch);
+        wireSocket(sock, dispatch, () => stateRef.current);
       } catch (err) {
         if (cancelled) return;
         dispatch({ type: "AUTH_ERROR", error: err && err.message ? err.message : String(err) });
@@ -334,6 +373,29 @@ function App() {
       renderScene(state),
     ),
 
+    state.reconnecting ? h(Box, {
+      marginTop: 1,
+      borderStyle: "round",
+      borderColor: "yellow",
+      paddingX: 1,
+    },
+      h(Text, { color: "yellow", bold: true }, "⟳ Reconnecting…"),
+      h(Text, { dimColor: true }, "  Server has 10s grace; we'll re-sync the round automatically."),
+    ) : null,
+
+    state.confirmDialog === "forfeit" ? h(Box, {
+      marginTop: 1,
+      borderStyle: "double",
+      borderColor: "red",
+      paddingX: 2,
+      paddingY: 0,
+      flexDirection: "column",
+    },
+      h(Text, { color: "red", bold: true }, "Forfeit match?"),
+      h(Text, null, "Press Y to forfeit (you'll lose this match), N to keep playing."),
+      h(Text, { dimColor: true }, "  [Y] forfeit    [N] cancel"),
+    ) : null,
+
     state.toast ? h(Box, { marginTop: 1 },
       h(Text, { color: "yellow" }, state.toast),
     ) : null,
@@ -345,6 +407,8 @@ function App() {
 }
 
 function hint(state) {
+  if (state.confirmDialog) return "[Y] confirm  [N] cancel";
+  if (state.reconnecting) return "Reconnecting…  (Q to give up)";
   switch (state.appPhase) {
     case "lobby": return "Press F to find a match. Q to quit.";
     case "searching": return "Press X to cancel queue. Q to quit.";
@@ -617,12 +681,28 @@ function handleAnswerInput({ input, key, state, sock, dispatch }) {
   }
 }
 
-function wireSocket(sock, dispatch) {
-  sock.on("connect", () => dispatch({ type: "SOCKET_CONNECTED" }));
+function wireSocket(sock, dispatch, getState) {
+  sock.on("connect", () => {
+    dispatch({ type: "SOCKET_CONNECTED" });
+    // Re-attach: if we were mid-match before the drop, re-request the
+    // current round state so we sync up. Server already remaps our
+    // socket via handleReconnect (matched by userId).
+    const st = getState();
+    if (st.appPhase === "in_match" && st.match?.gameId) {
+      try { sock.emit("request_round_state", { gameId: st.match.gameId }); } catch {}
+    }
+  });
   sock.on("disconnect", () => dispatch({ type: "SOCKET_DISCONNECTED" }));
   sock.on("connect_error", (err) =>
     dispatch({ type: "ERROR", message: err?.message || "connect_error" }),
   );
+
+  sock.on("game_reattached", (p) => {
+    // Server confirms re-attach within the 10s grace window.
+    if (p?.gameId) {
+      try { sock.emit("request_round_state", { gameId: p.gameId }); } catch {}
+    }
+  });
 
   sock.on("welcome", (msg) => {
     if (msg?.handle && msg?.socketId) {
