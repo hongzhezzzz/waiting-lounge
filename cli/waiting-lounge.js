@@ -14,21 +14,28 @@
 // modify Claude Code settings.")
 
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
-const crypto = require("crypto");
 const http = require("http");
 const https = require("https");
 const readline = require("readline");
 
-const DEFAULT_BACKEND = "https://waiting-lounge.onrender.com";
-const DEFAULT_FRONTEND = "https://waiting-lounge.vercel.app";
-const HOME = os.homedir();
-const CONFIG_DIR = path.join(HOME, ".waiting-lounge");
-const HOOK_PATH = path.join(CONFIG_DIR, "hook.js");
-const DEVICE_ID_PATH = path.join(CONFIG_DIR, "device_id");
-const BACKEND_URL_PATH = path.join(CONFIG_DIR, "backend_url");
-const FRONTEND_URL_PATH = path.join(CONFIG_DIR, "frontend_url");
+// Shared config helpers — also used by cli/play.mjs.
+const {
+  DEFAULT_BACKEND,
+  DEFAULT_FRONTEND,
+  HOME,
+  CONFIG_DIR,
+  HOOK_PATH,
+  DEVICE_ID_PATH,
+  BACKEND_URL_PATH,
+  FRONTEND_URL_PATH,
+  ensureConfigDir,
+  readOrCreateDeviceId,
+  readBackendUrl,
+  readFrontendUrl,
+  writeBackendUrlIfMissing,
+  writeFrontendUrlIfMissing,
+} = require("./lib/config");
 
 function locateHookSource() {
   // The CLI ships with the hook script at `local-hook/hook.js` (relative
@@ -42,48 +49,6 @@ function locateHookSource() {
     if (fs.existsSync(c)) return c;
   }
   return null;
-}
-
-function ensureConfigDir() {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  }
-}
-
-function readOrCreateDeviceId() {
-  ensureConfigDir();
-  if (fs.existsSync(DEVICE_ID_PATH)) {
-    return fs.readFileSync(DEVICE_ID_PATH, "utf8").trim();
-  }
-  const id = crypto.randomUUID();
-  fs.writeFileSync(DEVICE_ID_PATH, id, { mode: 0o600 });
-  return id;
-}
-
-function readBackendUrl() {
-  if (fs.existsSync(BACKEND_URL_PATH)) {
-    return fs.readFileSync(BACKEND_URL_PATH, "utf8").trim();
-  }
-  return DEFAULT_BACKEND;
-}
-
-function readFrontendUrl() {
-  if (fs.existsSync(FRONTEND_URL_PATH)) {
-    return fs.readFileSync(FRONTEND_URL_PATH, "utf8").trim();
-  }
-  return DEFAULT_FRONTEND;
-}
-
-function writeBackendUrlIfMissing(url) {
-  if (!fs.existsSync(BACKEND_URL_PATH)) {
-    fs.writeFileSync(BACKEND_URL_PATH, url, { mode: 0o600 });
-  }
-}
-
-function writeFrontendUrlIfMissing(url) {
-  if (!fs.existsSync(FRONTEND_URL_PATH)) {
-    fs.writeFileSync(FRONTEND_URL_PATH, url, { mode: 0o600 });
-  }
 }
 
 const HOOK_EVENTS = [
@@ -534,6 +499,8 @@ function cmdHelp() {
   console.log("  waiting-lounge install      Install the local hook. Prompts to merge into");
   console.log("                              ~/.claude/settings.json automatically (with backup).");
   console.log("                              Pass -y to skip the prompt, --print-only to never write.");
+  console.log("  waiting-lounge play         Open the terminal lounge — find a match and play");
+  console.log("                              Brain Bet without leaving your terminal.");
   console.log("  waiting-lounge pair         Print the one-time browser pairing URL");
   console.log("  waiting-lounge status       Show what's installed and whether the backend is reachable");
   console.log("  waiting-lounge test         Send a fake event to the backend; prints what listeners saw");
@@ -553,6 +520,12 @@ const args = process.argv.slice(3);
   switch (cmd) {
     case "install":
       await cmdInstall(args);
+      break;
+    case "play":
+      // Hand off to the ESM TUI entrypoint. The .mjs runs `render()` at
+      // top level; ink + the socket connection keep the event loop alive
+      // until the user presses Q (which calls useApp().exit()).
+      await import("./play.mjs");
       break;
     case "pair":
       cmdPair();
