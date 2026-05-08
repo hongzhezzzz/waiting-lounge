@@ -416,6 +416,7 @@ export class BrainBetGame implements GameRunner {
     });
     if (this.state.betPhaseTimer) clearTimeout(this.state.betPhaseTimer);
     this.state.betPhaseTimer = setTimeout(() => this.closeBetPhase(round), BET_PHASE_MS);
+    this.scheduleBotBet(round);
   }
 
   // Records a player's bet and, if both players have submitted, advances
@@ -509,6 +510,100 @@ export class BrainBetGame implements GameRunner {
     });
     if (this.state.roundTimer) clearTimeout(this.state.roundTimer);
     this.state.roundTimer = setTimeout(() => this.timeoutRound(), ROUND_TIMEOUT_MS[round.type]);
+    this.scheduleBotAnswer(round);
+  }
+
+  // Bot driver — only fires when this game has isBotMatch=true. The
+  // bot lives entirely in this resolver: synthetic socketId, no real
+  // Socket.IO connection, never seen by the leaderboard.
+  private scheduleBotBet(round: Round) {
+    if (!this.game.isBotMatch || !this.game.botSocketId) return;
+    const botId = this.game.botSocketId;
+    const myStack = this.state.chipStacks[botId] ?? 0;
+    // 70% check, 15% raise_25, 10% raise_50, 5% fold. Skip raises if
+    // the bot can't afford them. Stagger 1.5–3 s so the human sees the
+    // panel and feels the moment.
+    const delay = 1500 + Math.random() * 1500;
+    setTimeout(() => {
+      if (round.resolved || round !== this.state.currentRound || round.phase !== "bet") return;
+      const r = Math.random();
+      let choice: BetActionType;
+      if (r < 0.7) choice = "check";
+      else if (r < 0.85 && myStack >= 25) choice = "raise_25";
+      else if (r < 0.95 && myStack >= 50) choice = "raise_50";
+      else choice = "fold";
+      this.handleBetAction(round, botId, { type: choice, raise: 0 });
+    }, delay);
+  }
+
+  private scheduleBotAnswer(round: Round) {
+    if (!this.game.isBotMatch || !this.game.botSocketId) return;
+    const botId = this.game.botSocketId;
+    // Stagger 2–6 s so the answer doesn't snap in instantly. Bot
+    // accuracy is calibrated to "honest amateur" — ~55% on objective
+    // questions, deterministic-optimal on Monty Hall, info-aware on
+    // Indian Poker.
+    const delay = 2000 + Math.random() * 4000;
+    setTimeout(() => {
+      if (round.resolved || round !== this.state.currentRound || round.phase !== "answer") return;
+      this.handleAction(botId, this.computeBotAnswer(round, botId));
+    }, delay);
+  }
+
+  private computeBotAnswer(round: Round, botId: SocketId): unknown {
+    if (round.type === "indian_poker") {
+      const ip = round.state as IndianPokerState;
+      // Bot can see the human's card (per Indian Poker rules — each
+      // player sees the OPPONENT's card). High opponent → fold.
+      const humanCard = Object.entries(ip.cards).find(([id]) => id !== botId)?.[1] ?? null;
+      const choice =
+        humanCard != null && humanCard >= 9
+          ? "fold"
+          : humanCard != null && humanCard <= 5
+            ? "bet"
+            : Math.random() < 0.5 ? "bet" : "fold";
+      return { type: "indian_poker_decide", choice };
+    }
+    if (round.type === "estimation") {
+      const es = round.state as EstimationState;
+      const noise = (Math.random() - 0.5) * 0.6; // ±30%
+      return { type: "estimation_submit", value: Math.max(1, Math.round(es.answer * (1 + noise))) };
+    }
+    if (round.type === "chicken") {
+      // 3–6 most of the time, occasional 7 (riskier).
+      const v = Math.random() < 0.85 ? 3 + Math.floor(Math.random() * 4) : 7;
+      return { type: "chicken_pick", value: v };
+    }
+    if (round.type === "big_o") {
+      const bs = round.state as BigOState;
+      const correct = Math.random() < 0.55;
+      const choice = correct ? bs.answer : BIG_O_CHOICES[Math.floor(Math.random() * BIG_O_CHOICES.length)];
+      return { type: "big_o_lock", choice };
+    }
+    if (round.type === "monty_mirage") {
+      const ms = round.state as MontyMirageState;
+      // Always switch — the optimal Monty Hall move regardless of
+      // problem framing. Bot wins this round at the door's optimal rate.
+      return { type: "monty_mirage_submit", value: ms.answer };
+    }
+    if (round.type === "geo_trivia") {
+      const gs = round.state as GeoTriviaState;
+      const q = GEO_BANK.find((x) => x.id === gs.questionId);
+      const choices = q?.choices ?? [gs.answer];
+      const correct = Math.random() < 0.55;
+      const choice = correct ? gs.answer : choices[Math.floor(Math.random() * choices.length)];
+      return { type: "geo_trivia_lock", choice };
+    }
+    // stock_direction
+    const ss = round.state as StockDirectionState;
+    const correct = Math.random() < 0.55;
+    return {
+      type: "stock_direction_submit",
+      direction: correct
+        ? ss.answerDirection
+        : ss.answerDirection === "up" ? "down" : "up",
+      magnitude: Math.max(0, Math.min(20, Math.round(ss.answerMagnitude + (Math.random() - 0.5) * 8))),
+    };
   }
 
   private pickRoundType(): RoundType {
@@ -1032,27 +1127,40 @@ export class BrainBetGame implements GameRunner {
         ? null
         : this.game.players.find((p) => p.socketId === winnerSocketId)?.userId ?? null;
 
-    let settle;
-    try {
-      const [a, b] = this.game.players;
-      settle = await settleGame({
-        gameRoundId: (this.game as Game & { gameRoundId?: string }).gameRoundId!,
-        ante: this.game.ante,
-        playerAId: a.userId,
-        playerBId: b.userId,
-        winnerId: winnerUserId,
-        pendingRefundIds: this.game.pendingRefundIds,
-      });
-    } catch (err) {
-      console.error("[brain_bet] settle failed", (err as Error).message);
-      this.io.to(this.game.roomId).emit("game_aborted", {
-        gameId: this.game.id,
-        reason: "settle_failed",
-      });
-      games.delete(this.game.id);
-      roomGame.delete(this.game.roomId);
-      liveRunners.delete(this.game.id);
-      return;
+    // Bot matches skip the platform-points settlement entirely — no
+    // chargeAntes ran at game start, no settleGame at end. The chip
+    // stacks still moved during the game (so the chip leader is real)
+    // but no real points change hands and the bot doesn't appear in
+    // game_rounds / point_transactions.
+    let settle: { outcome: "win" | "tie"; payout: number; newBalances: Record<string, number> };
+    if (this.game.isBotMatch) {
+      settle = {
+        outcome: winnerSocketId == null ? "tie" : "win",
+        payout: 0,
+        newBalances: {},
+      };
+    } else {
+      try {
+        const [a, b] = this.game.players;
+        settle = await settleGame({
+          gameRoundId: (this.game as Game & { gameRoundId?: string }).gameRoundId!,
+          ante: this.game.ante,
+          playerAId: a.userId,
+          playerBId: b.userId,
+          winnerId: winnerUserId,
+          pendingRefundIds: this.game.pendingRefundIds,
+        });
+      } catch (err) {
+        console.error("[brain_bet] settle failed", (err as Error).message);
+        this.io.to(this.game.roomId).emit("game_aborted", {
+          gameId: this.game.id,
+          reason: "settle_failed",
+        });
+        games.delete(this.game.id);
+        roomGame.delete(this.game.roomId);
+        liveRunners.delete(this.game.id);
+        return;
+      }
     }
 
     this.io.to(this.game.roomId).emit("game_resolved", {
@@ -1079,18 +1187,21 @@ export class BrainBetGame implements GameRunner {
     if (this.state.betPhaseTimer) clearTimeout(this.state.betPhaseTimer);
     for (const t of Object.values(this.state.disconnectTimers)) clearTimeout(t);
 
-    try {
-      const [a, b] = this.game.players;
-      await settleGame({
-        gameRoundId: (this.game as Game & { gameRoundId?: string }).gameRoundId!,
-        ante: this.game.ante,
-        playerAId: a.userId,
-        playerBId: b.userId,
-        winnerId: null,
-        pendingRefundIds: this.game.pendingRefundIds,
-      });
-    } catch (err) {
-      console.error("[brain_bet] abort refund failed", (err as Error).message);
+    // Bot matches never anted, so there's nothing to refund.
+    if (!this.game.isBotMatch) {
+      try {
+        const [a, b] = this.game.players;
+        await settleGame({
+          gameRoundId: (this.game as Game & { gameRoundId?: string }).gameRoundId!,
+          ante: this.game.ante,
+          playerAId: a.userId,
+          playerBId: b.userId,
+          winnerId: null,
+          pendingRefundIds: this.game.pendingRefundIds,
+        });
+      } catch (err) {
+        console.error("[brain_bet] abort refund failed", (err as Error).message);
+      }
     }
 
     this.io.to(this.game.roomId).emit("game_aborted", {

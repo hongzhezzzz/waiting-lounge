@@ -59,6 +59,12 @@ export type Game = {
   state: unknown; // type-specific (spot-the-bug round state, etc.)
   pendingRefundIds: string[]; // pending_refund row ids — cleared on settle
   resolved: boolean;
+  // Bot fill (3b.3): when set, one of the players is a calibrated
+  // backend-side bot. Bot games skip the chargeAntes/settleGame
+  // pipeline entirely so no platform points move and the bot doesn't
+  // pollute the leaderboard.
+  isBotMatch?: boolean;
+  botSocketId?: SocketId;
 };
 
 export const users = new Map<SocketId, UserInfo>();

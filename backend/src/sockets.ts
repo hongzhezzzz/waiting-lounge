@@ -32,10 +32,15 @@ const ALLOWED_GAME_TYPES: ReadonlyArray<GameType> = ["spot_the_bug", "brain_bet"
 const ALLOWED_DURATIONS: ReadonlyArray<GameDuration> = [1, 5, 10];
 const INVITE_TTL_MS = 30_000;
 // Pool matchmaking ("Find a match") uses fixed defaults so all
-// queueing players land in the same per-gameType bucket. 3b.3 will
-// add a bot-fill timer on top of this same flow.
+// queueing players land in the same per-gameType bucket.
 const POOL_DEFAULT_DURATION: GameDuration = 5;
 const POOL_DEFAULT_ANTE = 100;
+// 3b.3 — Bot fill. If a pool-queued human waits this long without
+// a real peer arriving, spawn a calibrated bot to play with them.
+// Bot games skip chargeAntes/settleGame entirely so no platform
+// points change hands and the bot doesn't pollute the leaderboard.
+const POOL_BOT_FILL_MS = 30_000;
+const poolBotTimers = new Map<string, NodeJS.Timeout>();
 
 // Game-mode queue: per (gameType, durationMin, ante) tuple.
 const gameQueues = new Map<string, string[]>();
@@ -69,6 +74,75 @@ function getIdleUsers(excludeSocketId?: string, excludeUserId?: string) {
     seen.set(info.userId, { handle: info.handle, userId: info.userId, socketId });
   }
   return Array.from(seen.values());
+}
+
+// Spawns a bot to play with the queued human. Builds a Game with one
+// real player + one synthetic "lounge-bot" entry, registers it with the
+// runner, and starts. The runner detects isBotMatch and (a) skips
+// chargeAntes/settleGame entirely and (b) auto-acts for the bot's
+// socketId on each phase change.
+function startBotMatchFor(
+  io: Server,
+  humanSocketId: string,
+  gameType: GameType,
+  durationMin: GameDuration,
+  ante: number,
+): boolean {
+  const human = users.get(humanSocketId);
+  if (!human || !human.userId || human.roomId) return false;
+
+  // Synthetic bot identity — never inserted into `users` Map, never
+  // hits the DB. Handle prefix `lounge-bot-` is the public signal the
+  // frontend uses to render the robot icon and "no points" notice.
+  const botSocketId = `bot:${uuid()}`;
+  const botUserId = `bot:${uuid()}`;
+  const botHandle = `lounge-bot-${String(Math.floor(Math.random() * 1000)).padStart(3, "0")}`;
+
+  removeFromAllQueues(humanSocketId);
+  removeFromGameQueues(humanSocketId);
+
+  const roomId = uuid();
+  const players: GamePlayer[] = [
+    { socketId: humanSocketId, userId: human.userId, handle: human.handle, score: 0, disconnectedAt: null },
+    { socketId: botSocketId, userId: botUserId, handle: botHandle, score: 0, disconnectedAt: null },
+  ];
+  const game: Game = {
+    id: uuid(),
+    type: gameType,
+    roomId,
+    players,
+    pot: ante * 2,
+    ante,
+    durationMin,
+    startedAt: Date.now(),
+    endsAt: Date.now() + durationMin * 60_000,
+    state: null,
+    pendingRefundIds: [],
+    resolved: false,
+    isBotMatch: true,
+    botSocketId,
+  };
+  games.set(game.id, game);
+  roomGame.set(roomId, game.id);
+
+  human.roomId = roomId;
+  io.sockets.sockets.get(humanSocketId)?.join(roomId);
+
+  const runner = buildRunner(game, io);
+  liveRunners.set(game.id, runner);
+
+  io.to(humanSocketId).emit("game_started", {
+    gameId: game.id,
+    roomId,
+    gameType,
+    durationMin,
+    ante,
+    peerHandle: botHandle,
+  });
+  log("bot_match_started", { gameId: game.id, type: gameType, human: human.handle, bot: botHandle });
+
+  runner.start();
+  return true;
 }
 
 // Drives the actual game start once two specific socket ids are committed
@@ -403,6 +477,11 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("cancel_game_queue", () => {
       removeFromGameQueues(socket.id);
+      const t = poolBotTimers.get(socket.id);
+      if (t) {
+        clearTimeout(t);
+        poolBotTimers.delete(socket.id);
+      }
       socket.emit("game_queue_cancelled", {});
     });
 
@@ -445,10 +524,33 @@ export function registerSocketHandlers(io: Server) {
         q.push(socket.id);
         socket.emit("pool_waiting", { gameType, durationMin, ante });
         log("pool_queued", { socketId: socket.id, key });
+        // Schedule bot fill if no real peer arrives within the window.
+        const existing = poolBotTimers.get(socket.id);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+          poolBotTimers.delete(socket.id);
+          // Re-check the world — only fill if the human is still
+          // waiting and not yet in a game.
+          const meNow = users.get(socket.id);
+          if (!meNow || meNow.roomId) return;
+          // Pull them out of the queue (the bot match replaces it).
+          removeFromGameQueues(socket.id);
+          startBotMatchFor(io, socket.id, gameType, durationMin, ante);
+        }, POOL_BOT_FILL_MS);
+        poolBotTimers.set(socket.id, timer);
         return;
       }
 
+      // Real peer found — cancel any pending bot timer for either
+      // side, then pair.
       const peerId = q.splice(peerIdx, 1)[0];
+      for (const sid of [socket.id, peerId]) {
+        const t = poolBotTimers.get(sid);
+        if (t) {
+          clearTimeout(t);
+          poolBotTimers.delete(sid);
+        }
+      }
       const ok = await startGameBetween(io, socket.id, peerId, gameType, durationMin, ante);
       if (!ok) {
         q.push(socket.id);
@@ -590,6 +692,11 @@ export function registerSocketHandlers(io: Server) {
       removeFromGameQueues(socket.id);
       unregisterDeviceSocket(socket.id);
       cleanupInvitesForSocket(io, socket.id);
+      const botTimer = poolBotTimers.get(socket.id);
+      if (botTimer) {
+        clearTimeout(botTimer);
+        poolBotTimers.delete(socket.id);
+      }
 
       // If this socket is in an active game, notify the runner (grace timer).
       if (me.roomId) {

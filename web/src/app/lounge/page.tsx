@@ -192,7 +192,7 @@ export default function LoungePage() {
         <div className="flex items-baseline justify-between gap-3">
           <div>
             <div className="text-sm font-medium text-ink">Find a match</div>
-            <div className="text-xs text-muted">{POOL_DURATION_LABEL} · {POOL_ANTE} pt ante · pairs with the next idle player</div>
+            <div className="text-xs text-muted">{POOL_DURATION_LABEL} · {POOL_ANTE} pt ante · pairs with the next idle player, or a lounge bot after 30 s</div>
           </div>
           {poolMatching && (
             <button onClick={cancelMatch} className="text-xs text-muted hover:text-ink underline whitespace-nowrap">
