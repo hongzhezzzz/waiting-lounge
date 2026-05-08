@@ -7,6 +7,12 @@ export interface GameRunner {
   handleAction(socketId: SocketId, action: unknown): void;
   handleDisconnect(socketId: SocketId): void;
   handleReconnect(socketId: SocketId, userId: UserId): boolean;
+  // Re-emits the current round_start (and the resolved payload, if any)
+  // to one specific socket. Called when the client mounts the game page
+  // and asks for state via `request_round_state`. Covers the race where
+  // the original round_start was emitted before the client's game page
+  // had mounted and subscribed to game_state_update.
+  replayCurrentState(socketId: SocketId): void;
   abort(reason: string): Promise<void>;
 }
 

@@ -92,10 +92,6 @@ const ROUND_TIMEOUT_MS: Record<RoundType, number> = {
   stock_direction: 30_000,
 };
 const POST_ROUND_PAUSE_MS = 3000;
-// Delay between game_started and the very first round_start so the
-// receiving clients have time to navigate to the game page and subscribe
-// to game_state_update. See start() below.
-const FIRST_ROUND_DELAY_MS = 800;
 const DISCONNECT_GRACE_MS = 10_000;
 
 const ROUNDS_BY_DURATION: Record<GameDuration, number> = {
@@ -212,14 +208,93 @@ export class BrainBetGame implements GameRunner {
   }
 
   start() {
-    // Defer the first round_start so freshly-arriving clients have time
-    // to navigate to /games/[gameType]/[roomId] and subscribe to
-    // game_state_update before the round opens. Without this, a client
-    // mid-router-push when game_started fires can miss round_start and
-    // sit idle until the round timer ticks (up to ~30 s for some round
-    // types). 800 ms covers Next.js client-side navigation in the
-    // common case while still feeling near-instant.
-    setTimeout(() => this.startRound(), FIRST_ROUND_DELAY_MS);
+    this.startRound();
+  }
+
+  // Replays the current round_start to one specific socket. Called from
+  // the `request_round_state` socket handler when a fresh client mounts
+  // the game page after round_start was already emitted to the room.
+  replayCurrentState(socketId: SocketId): void {
+    if (this.game.resolved) return;
+    const round = this.state.currentRound;
+    if (!round) return;
+    this.emitRoundStartTo(round, socketId);
+  }
+
+  // Emits the round_start payload for `round` to one specific socket.
+  // Indian Poker tailors per-player (each sees only the OPPONENT card);
+  // every other round type has a uniform payload. Used by both
+  // startRound (looping over players) and replayCurrentState.
+  private emitRoundStartTo(round: Round, socketId: SocketId): void {
+    const base = {
+      gameId: this.game.id,
+      type: "round_start" as const,
+      round: round.index,
+      total: round.total,
+      scores: this.publicScores(),
+      endsAt: round.endsAt,
+    };
+    let payloadEvent: Record<string, unknown>;
+    if (round.type === "indian_poker") {
+      const ip = round.state as IndianPokerState;
+      const opp = this.game.players.find((p) => p.socketId !== socketId);
+      const opponentCard = opp ? ip.cards[opp.socketId] : null;
+      payloadEvent = {
+        ...base,
+        roundType: "indian_poker",
+        payload: { opponentCard, opponentHandle: opp?.handle ?? null },
+      };
+    } else if (round.type === "estimation") {
+      const es = round.state as EstimationState;
+      const q = QUESTIONS.find((x) => x.id === es.questionId);
+      payloadEvent = {
+        ...base,
+        roundType: "estimation",
+        payload: { question: q?.question ?? "" },
+      };
+    } else if (round.type === "chicken") {
+      payloadEvent = {
+        ...base,
+        roundType: "chicken",
+        payload: { range: [1, 10], bustThreshold: 8 },
+      };
+    } else if (round.type === "big_o") {
+      const bs = round.state as BigOState;
+      const q = BIG_O_BANK.find((x) => x.id === bs.questionId);
+      payloadEvent = {
+        ...base,
+        roundType: "big_o",
+        payload: {
+          language: q?.language ?? "",
+          code: q?.code ?? [],
+          choices: BIG_O_CHOICES,
+        },
+      };
+    } else if (round.type === "monty_mirage") {
+      const ms = round.state as MontyMirageState;
+      const q = MONTY_BANK.find((x) => x.id === ms.questionId);
+      payloadEvent = {
+        ...base,
+        roundType: "monty_mirage",
+        payload: { prompt: q?.prompt ?? "" },
+      };
+    } else if (round.type === "geo_trivia") {
+      const gs = round.state as GeoTriviaState;
+      const q = GEO_BANK.find((x) => x.id === gs.questionId);
+      payloadEvent = {
+        ...base,
+        roundType: "geo_trivia",
+        payload: { prompt: q?.prompt ?? "", choices: q?.choices ?? [] },
+      };
+    } else {
+      const ss = round.state as StockDirectionState;
+      payloadEvent = {
+        ...base,
+        roundType: "stock_direction",
+        payload: { visiblePrices: ss.visiblePrices, magnitudeMax: 20 },
+      };
+    }
+    this.io.to(socketId).emit("game_state_update", payloadEvent);
   }
 
   private startRound() {
@@ -240,108 +315,12 @@ export class BrainBetGame implements GameRunner {
     };
     this.state.currentRound = round;
 
-    // Emit round_start with the public payload for this round type. For
-    // Indian Poker, each player gets a tailored payload (they see the
-    // OPPONENT's card but not their own).
-    if (type === "indian_poker") {
-      const ip = roundState as IndianPokerState;
-      for (const p of this.game.players) {
-        const opp = this.game.players.find((x) => x.socketId !== p.socketId);
-        const opponentCard = opp ? ip.cards[opp.socketId] : null;
-        this.io.to(p.socketId).emit("game_state_update", {
-          gameId: this.game.id,
-          type: "round_start",
-          roundType: "indian_poker",
-          round: round.index,
-          total: round.total,
-          scores: this.publicScores(),
-          endsAt: round.endsAt,
-          payload: {
-            opponentCard,
-            opponentHandle: opp?.handle ?? null,
-          },
-        });
-      }
-    } else if (type === "estimation") {
-      const es = roundState as EstimationState;
-      const q = QUESTIONS.find((x) => x.id === es.questionId);
-      this.io.to(this.game.roomId).emit("game_state_update", {
-        gameId: this.game.id,
-        type: "round_start",
-        roundType: "estimation",
-        round: round.index,
-        total: round.total,
-        scores: this.publicScores(),
-        endsAt: round.endsAt,
-        payload: { question: q?.question ?? "" },
-      });
-    } else if (type === "chicken") {
-      this.io.to(this.game.roomId).emit("game_state_update", {
-        gameId: this.game.id,
-        type: "round_start",
-        roundType: "chicken",
-        round: round.index,
-        total: round.total,
-        scores: this.publicScores(),
-        endsAt: round.endsAt,
-        payload: { range: [1, 10], bustThreshold: 8 },
-      });
-    } else if (type === "big_o") {
-      const bs = roundState as BigOState;
-      const q = BIG_O_BANK.find((x) => x.id === bs.questionId);
-      this.io.to(this.game.roomId).emit("game_state_update", {
-        gameId: this.game.id,
-        type: "round_start",
-        roundType: "big_o",
-        round: round.index,
-        total: round.total,
-        scores: this.publicScores(),
-        endsAt: round.endsAt,
-        payload: {
-          language: q?.language ?? "",
-          code: q?.code ?? [],
-          choices: BIG_O_CHOICES,
-        },
-      });
-    } else if (type === "monty_mirage") {
-      const ms = roundState as MontyMirageState;
-      const q = MONTY_BANK.find((x) => x.id === ms.questionId);
-      this.io.to(this.game.roomId).emit("game_state_update", {
-        gameId: this.game.id,
-        type: "round_start",
-        roundType: "monty_mirage",
-        round: round.index,
-        total: round.total,
-        scores: this.publicScores(),
-        endsAt: round.endsAt,
-        payload: { prompt: q?.prompt ?? "" },
-      });
-    } else if (type === "geo_trivia") {
-      const gs = roundState as GeoTriviaState;
-      const q = GEO_BANK.find((x) => x.id === gs.questionId);
-      this.io.to(this.game.roomId).emit("game_state_update", {
-        gameId: this.game.id,
-        type: "round_start",
-        roundType: "geo_trivia",
-        round: round.index,
-        total: round.total,
-        scores: this.publicScores(),
-        endsAt: round.endsAt,
-        payload: { prompt: q?.prompt ?? "", choices: q?.choices ?? [] },
-      });
-    } else {
-      // stock_direction — only the first 30 prices are sent to clients.
-      const ss = roundState as StockDirectionState;
-      this.io.to(this.game.roomId).emit("game_state_update", {
-        gameId: this.game.id,
-        type: "round_start",
-        roundType: "stock_direction",
-        round: round.index,
-        total: round.total,
-        scores: this.publicScores(),
-        endsAt: round.endsAt,
-        payload: { visiblePrices: ss.visiblePrices, magnitudeMax: 20 },
-      });
+    // Per-player emit (uniform payload for most round types; Indian
+    // Poker tailors per-socket so each player sees only the opponent's
+    // card). Looping always, even for uniform rounds, keeps the payload
+    // shape identical between startRound and replayCurrentState.
+    for (const p of this.game.players) {
+      this.emitRoundStartTo(round, p.socketId);
     }
 
     if (this.state.roundTimer) clearTimeout(this.state.roundTimer);

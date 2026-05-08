@@ -189,6 +189,13 @@ export default function GameRoomPage() {
 
     if (socket.connected && socket.id) mySocketIdRef.current = socket.id;
 
+    // Ask the server for the current round_start in case it was emitted
+    // before this page mounted (race between game_started → router.push
+    // → page mount → subscribe vs. server's runner.start() → emit
+    // round_start). Idempotent — receiving duplicate round_start is a
+    // no-op for the renderer.
+    socket.emit("request_round_state", { gameId });
+
     return () => {
       socket.off("welcome", onWelcome);
       socket.off("game_state_update", onState);
