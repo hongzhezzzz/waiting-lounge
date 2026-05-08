@@ -5,7 +5,7 @@ import { ClaudeNeedsYouOverlay } from "./ClaudeNeedsYouOverlay";
 import { useAgentStatus } from "@/lib/agentStatus";
 
 export function GlobalAgentOverlay() {
-  const { meta } = useAgentStatus();
+  const { meta, acknowledge } = useAgentStatus();
   const [open, setOpen] = useState(false);
   const lastShownTsRef = useRef(0);
 
@@ -18,13 +18,24 @@ export function GlobalAgentOverlay() {
     }
   }, [meta.status, meta.ts]);
 
+  // "Return to terminal" → close the modal AND clear the underlying
+  // status. The provider also suppresses incoming needs_attention
+  // updates for a few seconds, so a burst of duplicate Notifications
+  // doesn't immediately re-pop the modal.
+  function handleClose() {
+    setOpen(false);
+    acknowledge();
+  }
+
   return (
     <ClaudeNeedsYouOverlay
       open={open}
-      onClose={() => setOpen(false)}
+      onClose={handleClose}
       onSnooze={() => {
         setOpen(false);
-        // If status is still needs_attention 30s later, re-open.
+        // Snooze does not acknowledge — the user explicitly wants to
+        // be re-shown. If status is still needs_attention 30s later,
+        // re-open.
         setTimeout(() => {
           if (meta.status === "needs_attention") setOpen(true);
         }, 30_000);

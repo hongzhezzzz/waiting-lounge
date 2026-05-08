@@ -21,6 +21,9 @@ type Snippet = {
 
 const ROUND_TIMEOUT_MS = 45_000;
 const POST_ROUND_PAUSE_MS = 2500;
+// See brainBet/resolver.ts for the rationale. 800 ms gives clients time
+// to navigate after receiving game_started before the first round opens.
+const FIRST_ROUND_DELAY_MS = 800;
 const DISCONNECT_GRACE_MS = 10_000;
 
 const ROUNDS_BY_DURATION: Record<GameDuration, number> = {
@@ -78,7 +81,11 @@ export class SpotTheBugGame implements GameRunner {
   }
 
   start() {
-    this.startRound();
+    // Defer the first round_start so freshly-arriving clients have time
+    // to navigate and subscribe to game_state_update. See brainBet's
+    // resolver for the full reasoning. 800 ms covers Next.js client-side
+    // navigation in the common case while still feeling near-instant.
+    setTimeout(() => this.startRound(), FIRST_ROUND_DELAY_MS);
   }
 
   private startRound() {

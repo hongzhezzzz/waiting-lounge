@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useBalance } from "@/lib/points";
 import { getSocket } from "@/lib/socket";
@@ -21,7 +20,6 @@ const POOL_DURATION_LABEL = "5-min match";
 export default function LoungePage() {
   const { session } = useAuth();
   const { points } = useBalance();
-  const router = useRouter();
   const [idleUsers, setIdleUsers] = useState<IdleUser[]>([]);
   const [target, setTarget] = useState<IdleUser | null>(null);
   const [pendingInviteId, setPendingInviteId] = useState<string | null>(null);
@@ -63,9 +61,11 @@ export default function LoungePage() {
     function onQueueCancelled() {
       setPoolMatching(null);
     }
-    function onStarted(p: { gameId: string; roomId: string; gameType: string; peerHandle: string }) {
+    function onStarted() {
+      // Routing is delegated to the layout-level <GameStartRedirect>.
+      // We only clear local state for cleanliness; the page is about
+      // to unmount on the redirect anyway.
       setPoolMatching(null);
-      router.push(`/games/${p.gameType}/${p.roomId}?gameId=${p.gameId}&peer=${encodeURIComponent(p.peerHandle)}`);
     }
 
     socket.on("idle_users", onIdleUsers);
@@ -91,7 +91,7 @@ export default function LoungePage() {
       socket.off("game_started", onStarted);
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [session, router]);
+  }, [session]);
 
   function findMatch(gameType: PoolGameType) {
     setPoolMatching(gameType);
