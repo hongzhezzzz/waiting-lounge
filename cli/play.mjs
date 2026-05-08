@@ -438,7 +438,12 @@ function App() {
   }, []);
 
   // -------- render --------
-  return h(Box, { flexDirection: "column", padding: 1 },
+  // Cap the top-level Box to terminal height with overflow:"hidden"
+  // so ink clips instead of letting the layout grow past the visible
+  // area — without this, round transitions cause the terminal to
+  // auto-scroll to keep the bottom in view, which reads as the screen
+  // jumping on every new question.
+  return h(Box, { flexDirection: "column", padding: 1, height: process.stdout.rows ?? 24, overflow: "hidden" },
     h(Box, {
       borderStyle: "round",
       borderColor: "cyan",
