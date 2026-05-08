@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { Users, MessageSquare, Trophy } from "lucide-react";
 import { getBackendUrl } from "@/lib/backend";
 
 type Stats = {
@@ -43,7 +44,10 @@ export function HomeStatusCards() {
   return (
     <div className="grid sm:grid-cols-3 gap-4">
       <Link href="/lounge" className="card p-5 hover:border-sage transition block">
-        <div className="text-xs text-muted uppercase tracking-wider mb-2">Lounge</div>
+        <div className="flex items-center gap-2 text-xs text-muted uppercase tracking-wider mb-2">
+          <Users className="w-3.5 h-3.5" strokeWidth={1.75} />
+          <span>Lounge</span>
+        </div>
         <div className="text-3xl font-medium text-ink mb-1 leading-none">
           {stats ? idle : "—"}
           <span className="text-base text-muted ml-2 font-normal">active</span>
@@ -54,7 +58,10 @@ export function HomeStatusCards() {
       </Link>
 
       <Link href="/board" className="card p-5 hover:border-sage transition block">
-        <div className="text-xs text-muted uppercase tracking-wider mb-2">Board</div>
+        <div className="flex items-center gap-2 text-xs text-muted uppercase tracking-wider mb-2">
+          <MessageSquare className="w-3.5 h-3.5" strokeWidth={1.75} />
+          <span>Board</span>
+        </div>
         <div className="text-3xl font-medium text-ink mb-1 leading-none">
           {stats ? posts : "—"}
           <span className="text-base text-muted ml-2 font-normal">post{posts === 1 ? "" : "s"}</span>
@@ -63,7 +70,10 @@ export function HomeStatusCards() {
       </Link>
 
       <Link href="/leaderboard" className="card p-5 hover:border-sage transition block">
-        <div className="text-xs text-muted uppercase tracking-wider mb-2">Leaderboard</div>
+        <div className="flex items-center gap-2 text-xs text-muted uppercase tracking-wider mb-2">
+          <Trophy className="w-3.5 h-3.5" strokeWidth={1.75} />
+          <span>Leaderboard</span>
+        </div>
         {stats && stats.topThree.length > 0 ? (
           <ul className="space-y-1 text-sm">
             {stats.topThree.map((row) => (
