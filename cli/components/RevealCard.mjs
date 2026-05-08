@@ -4,6 +4,7 @@
 
 import { Box, Text } from "ink";
 import { createElement as h } from "react";
+import { sparkline } from "../lib/sparkline.mjs";
 
 export function RevealCard({ resolved, mySocketId, peerSocketId, myHandle, peerHandle }) {
   if (!resolved) return null;
@@ -82,7 +83,14 @@ function renderReveal(roundType, reveal, mySocketId, peerSocketId) {
     const mySub = reveal.submissions?.[mySocketId];
     const peerSub = reveal.submissions?.[peerSocketId];
     const fmtSub = (s) => s ? `${s.direction === "up" ? "↑" : "↓"} ${s.magnitude}%` : "—";
+    // Concatenate visible + hidden prices into the full 60-bar line.
+    // visiblePrices isn't on the reveal payload — only hiddenPrices is.
+    // The full line still works with just hidden prices (the "next 30 min").
+    const fullLine = sparkline(reveal.hiddenPrices || []);
     return h(Box, { flexDirection: "column" },
+      fullLine
+        ? h(Text, { color: "yellow" }, `Next 30 min: ${fullLine}`)
+        : null,
       h(Text, null,
         `Truth: ${reveal.answerDirection === "up" ? "↑" : "↓"} ${reveal.answerMagnitude}%`,
       ),

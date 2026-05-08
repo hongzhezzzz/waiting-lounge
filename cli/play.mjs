@@ -24,6 +24,12 @@ import { RevealCard } from "./components/RevealCard.mjs";
 import { MatchEndScreen } from "./components/MatchEndScreen.mjs";
 import { IndianPokerRound } from "./components/rounds/IndianPoker.mjs";
 import { PlaceholderRound } from "./components/rounds/Placeholder.mjs";
+import { EstimationRound } from "./components/rounds/Estimation.mjs";
+import { MontyMirageRound } from "./components/rounds/MontyMirage.mjs";
+import { ChickenRound } from "./components/rounds/Chicken.mjs";
+import { BigORound } from "./components/rounds/BigO.mjs";
+import { GeoTriviaRound } from "./components/rounds/GeoTrivia.mjs";
+import { StockDirectionRound } from "./components/rounds/StockDirection.mjs";
 
 const initialState = {
   appPhase: "auth",      // auth|pairing|connecting|lobby|searching|in_match|match_end|error
@@ -41,7 +47,9 @@ const initialState = {
   round: null,           // { round, total, type, payload, phase, pot, chipStacks, endsAt }
   myBet: null,           // { type, raise, chipStack } (private)
   betsClosed: null,      // { bets, pot, chipStacks }
-  myDecision: null,      // for indian_poker answer phase
+  myAnswer: null,        // user's answer-phase lock (varies by round type)
+  numericInput: "",      // in-progress text for numeric rounds (estimation/monty/stock magnitude)
+  stockDir: null,        // sub-state for stock_direction: "up"|"down"|null
   resolved: null,        // last round_resolved payload
 
   end: null,             // game_resolved payload
@@ -95,7 +103,9 @@ function reducer(state, action) {
         round: null,
         myBet: null,
         betsClosed: null,
-        myDecision: null,
+        myAnswer: null,
+        numericInput: "",
+        stockDir: null,
         resolved: null,
         end: null,
       };
@@ -119,7 +129,9 @@ function reducer(state, action) {
         match: state.match ? { ...state.match, peerSocketId } : state.match,
         myBet: null,
         betsClosed: null,
-        myDecision: null,
+        myAnswer: null,
+        numericInput: "",
+        stockDir: null,
         resolved: null,
         betSecondsLeft: null,
       };
@@ -153,8 +165,12 @@ function reducer(state, action) {
         } : state.round,
         betSecondsLeft: null,
       };
-    case "DECISION_RECORDED":
-      return { ...state, myDecision: action.choice };
+    case "ANSWER_LOCKED":
+      return { ...state, myAnswer: action.value, numericInput: "" };
+    case "SET_NUMERIC_INPUT":
+      return { ...state, numericInput: action.value };
+    case "SET_STOCK_DIR":
+      return { ...state, stockDir: action.dir };
     case "ROUND_RESOLVED":
       return {
         ...state,
@@ -177,7 +193,9 @@ function reducer(state, action) {
         round: null,
         myBet: null,
         betsClosed: null,
-        myDecision: null,
+        myAnswer: null,
+        numericInput: "",
+        stockDir: null,
         resolved: null,
         end: null,
       };
@@ -235,17 +253,15 @@ function App() {
       }
       return;
     }
-    // Indian Poker answer phase: B or F.
-    if (state.round.phase === "answer" && state.round.type === "indian_poker" && !state.myDecision) {
-      let choice = null;
-      if (input === "b" || input === "B") choice = "bet";
-      else if (input === "f" || input === "F") choice = "fold";
-      if (choice) {
-        sockRef.current.emit("game_action", {
-          gameId: state.match.gameId,
-          action: { type: "indian_poker_decide", choice },
-        });
-      }
+    // Answer phase — dispatched per round type. All locks are
+    // optimistic (we set myAnswer immediately on emit); the server
+    // echo (decision/submission/pick/lock_recorded) is a no-op
+    // confirmation. If the server rejects we just don't get to play
+    // — same as the browser.
+    if (state.round.phase === "answer" && !state.myAnswer) {
+      handleAnswerInput({
+        input, key, state, sock: sockRef.current, dispatch,
+      });
     }
   });
 
@@ -334,12 +350,26 @@ function hint(state) {
     case "searching": return "Press X to cancel queue. Q to quit.";
     case "in_match":
       if (state.round?.phase === "bet" && !state.myBet) return "Pick a bet: C/1/2/3/A/F. Q to quit.";
-      if (state.round?.phase === "answer" && state.round.type === "indian_poker" && !state.myDecision) return "B = bet, F = fold. Q to quit.";
+      if (state.round?.phase === "answer" && !state.myAnswer) return answerHint(state);
       return "Q to quit (forfeits).";
     case "match_end": return "Press any key to return to lobby. Q to quit.";
     case "error": return "Press Q to quit.";
     default: return "Press Q to quit.";
   }
+}
+
+function answerHint(state) {
+  const t = state.round?.type;
+  if (t === "indian_poker") return "B = bet, F = fold. Q to quit.";
+  if (t === "chicken") return "Pick 1–9 or 0 (=10). Q to quit.";
+  if (t === "big_o" || t === "geo_trivia") return "Press 1–N to pick a choice. Q to quit.";
+  if (t === "estimation" || t === "monty_mirage") return "Type a number, Enter to submit. Backspace to edit. Q to quit.";
+  if (t === "stock_direction") {
+    return state.stockDir == null
+      ? "U = up, D = down. Q to quit."
+      : "Type magnitude % then Enter. Backspace to change direction. Q to quit.";
+  }
+  return "Q to quit (forfeits).";
 }
 
 function renderScene(state) {
@@ -412,7 +442,7 @@ function renderSearchTimer({ startedAt }) {
 }
 
 function renderInMatch(state) {
-  const { round, match, mySocketId, myHandle, myBet, myDecision, resolved, betSecondsLeft } = state;
+  const { round, match, mySocketId, myHandle, myBet, myAnswer, numericInput, stockDir, resolved, betSecondsLeft } = state;
   if (!round || !match) {
     return h(Text, null, "Waiting for round…");
   }
@@ -420,6 +450,25 @@ function renderInMatch(state) {
   const myChips = round.chipStacks?.[mySocketId] ?? 0;
   const peerChips = peerSocketId ? (round.chipStacks?.[peerSocketId] ?? 0) : 0;
   const isBotMatch = match.peerHandle?.startsWith("lounge-bot-");
+
+  const roundProps = {
+    payload: round.payload,
+    phase: round.phase,
+    myAnswer,
+    numericInput,
+    stockDir,
+    myHandle: myHandle || "you",
+    peerHandle: match.peerHandle,
+  };
+  const roundComponent =
+    round.type === "indian_poker" ? h(IndianPokerRound, { ...roundProps, myDecision: myAnswer }) :
+    round.type === "estimation" ? h(EstimationRound, roundProps) :
+    round.type === "monty_mirage" ? h(MontyMirageRound, roundProps) :
+    round.type === "chicken" ? h(ChickenRound, roundProps) :
+    round.type === "big_o" ? h(BigORound, roundProps) :
+    round.type === "geo_trivia" ? h(GeoTriviaRound, roundProps) :
+    round.type === "stock_direction" ? h(StockDirectionRound, roundProps) :
+    h(PlaceholderRound, { roundType: round.type, payload: round.payload, phase: round.phase });
 
   return h(Box, { flexDirection: "column" },
     h(ChipBar, {
@@ -436,19 +485,7 @@ function renderInMatch(state) {
       ),
     ),
 
-    round.type === "indian_poker"
-      ? h(IndianPokerRound, {
-          payload: round.payload,
-          phase: round.phase,
-          myDecision,
-          myHandle: myHandle || "you",
-          peerHandle: match.peerHandle,
-        })
-      : h(PlaceholderRound, {
-          roundType: round.type,
-          payload: round.payload,
-          phase: round.phase,
-        }),
+    roundComponent,
 
     round.phase === "bet"
       ? h(BetPhasePanel, { myStack: myChips, pot: round.pot, myBet, secondsLeft: betSecondsLeft })
@@ -476,6 +513,108 @@ function betKeyToChoice(input) {
   if (input === "a" || input === "A") return "all_in";
   if (input === "f" || input === "F") return "fold";
   return null;
+}
+
+// Dispatches answer-phase keys for the active round type. Numeric
+// rounds (estimation/monty/stock magnitude) build up a buffer in
+// state.numericInput and submit on Enter. Multiple-choice rounds
+// (big_o/geo) map digit keys to the choices array. Chicken maps
+// 1–9 + 0 to picks 1–10. Indian Poker uses B/F.
+function handleAnswerInput({ input, key, state, sock, dispatch }) {
+  const t = state.round.type;
+  const gameId = state.match.gameId;
+  const emit = (action) => sock.emit("game_action", { gameId, action });
+  const lockOptimistic = (value) => dispatch({ type: "ANSWER_LOCKED", value });
+
+  if (t === "indian_poker") {
+    let choice = null;
+    if (input === "b" || input === "B") choice = "bet";
+    else if (input === "f" || input === "F") choice = "fold";
+    if (choice) {
+      emit({ type: "indian_poker_decide", choice });
+      lockOptimistic(choice);
+    }
+    return;
+  }
+
+  if (t === "chicken") {
+    let value = null;
+    if (input >= "1" && input <= "9") value = parseInt(input, 10);
+    else if (input === "0") value = 10;
+    if (value != null) {
+      emit({ type: "chicken_pick", value });
+      lockOptimistic(value);
+    }
+    return;
+  }
+
+  if (t === "big_o" || t === "geo_trivia") {
+    const choices = state.round.payload?.choices || [];
+    const idx = parseInt(input, 10) - 1;
+    if (Number.isInteger(idx) && idx >= 0 && idx < choices.length) {
+      const choice = choices[idx];
+      emit({
+        type: t === "big_o" ? "big_o_lock" : "geo_trivia_lock",
+        choice,
+      });
+      lockOptimistic(choice);
+    }
+    return;
+  }
+
+  if (t === "estimation" || t === "monty_mirage") {
+    if (key.return) {
+      if (state.numericInput.length > 0) {
+        const value = parseFloat(state.numericInput);
+        if (!Number.isNaN(value)) {
+          emit({
+            type: t === "estimation" ? "estimation_submit" : "monty_mirage_submit",
+            value,
+          });
+          lockOptimistic(value);
+        }
+      }
+    } else if (key.backspace || key.delete) {
+      dispatch({ type: "SET_NUMERIC_INPUT", value: state.numericInput.slice(0, -1) });
+    } else if (input >= "0" && input <= "9" && state.numericInput.length < 12) {
+      dispatch({ type: "SET_NUMERIC_INPUT", value: state.numericInput + input });
+    } else if (input === "." && !state.numericInput.includes(".") && state.numericInput.length < 12) {
+      dispatch({ type: "SET_NUMERIC_INPUT", value: state.numericInput + input });
+    }
+    return;
+  }
+
+  if (t === "stock_direction") {
+    if (state.stockDir == null) {
+      if (input === "u" || input === "U") dispatch({ type: "SET_STOCK_DIR", dir: "up" });
+      else if (input === "d" || input === "D") dispatch({ type: "SET_STOCK_DIR", dir: "down" });
+      return;
+    }
+    if (key.return) {
+      if (state.numericInput.length > 0) {
+        const magnitude = parseFloat(state.numericInput);
+        if (!Number.isNaN(magnitude)) {
+          emit({
+            type: "stock_direction_submit",
+            direction: state.stockDir,
+            magnitude,
+          });
+          lockOptimistic({ direction: state.stockDir, magnitude });
+        }
+      }
+    } else if (key.backspace || key.delete) {
+      if (state.numericInput.length > 0) {
+        dispatch({ type: "SET_NUMERIC_INPUT", value: state.numericInput.slice(0, -1) });
+      } else {
+        // Empty buffer + backspace → return to direction picker.
+        dispatch({ type: "SET_STOCK_DIR", dir: null });
+      }
+    } else if (input >= "0" && input <= "9" && state.numericInput.length < 6) {
+      dispatch({ type: "SET_NUMERIC_INPUT", value: state.numericInput + input });
+    } else if (input === "." && !state.numericInput.includes(".") && state.numericInput.length < 6) {
+      dispatch({ type: "SET_NUMERIC_INPUT", value: state.numericInput + input });
+    }
+  }
 }
 
 function wireSocket(sock, dispatch) {
@@ -552,13 +691,23 @@ function wireSocket(sock, dispatch) {
         });
         break;
       case "decision_recorded":
-        dispatch({ type: "DECISION_RECORDED", choice: p.choice });
+        // Indian Poker server echo. Optimistic lock already set in
+        // useInput; this is a confirmation no-op (still safe to set).
+        dispatch({ type: "ANSWER_LOCKED", value: p.choice });
         break;
       case "submission_recorded":
+        // Estimation / Monty Mirage server echo. The value is the user's
+        // submitted number; for stock_direction it's { direction, magnitude }.
+        dispatch({ type: "ANSWER_LOCKED", value: p.value });
+        break;
       case "pick_recorded":
+        // Chicken server echo.
+        dispatch({ type: "ANSWER_LOCKED", value: p.value });
+        break;
       case "lock_recorded":
-        // 4d will handle these when answer-input renderers land. For now,
-        // these events are private echoes we don't need to react to.
+        // Big-O / Geo Trivia server echo. Server sends `correct: boolean`
+        // but not the choice itself — the optimistic local lock already
+        // captured the user's choice, so we leave myAnswer alone.
         break;
       case "round_resolved":
         dispatch({ type: "ROUND_RESOLVED", payload: p });
