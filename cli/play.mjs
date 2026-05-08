@@ -228,6 +228,10 @@ function reducer(state, action) {
       };
     case "BET_TICK":
       return { ...state, betSecondsLeft: state.betSecondsLeft != null ? Math.max(0, state.betSecondsLeft - 1) : null };
+    case "SEARCH_TICK":
+      // No-op state update — purely to trigger a re-render so
+      // renderSearchTimer recomputes elapsed/botFillIn from Date.now().
+      return { ...state };
     case "SHOW_CONFIRM":
       return { ...state, confirmDialog: action.dialogType };
     case "HIDE_CONFIRM":
@@ -379,6 +383,17 @@ function App() {
     const t = setInterval(() => dispatch({ type: "BET_TICK" }), 1000);
     return () => clearInterval(t);
   }, [state.appPhase, state.round?.phase]);
+
+  // -------- search-screen ticker --------
+  // The "Xs elapsed · bot fills in ~Ys" line is computed from
+  // poolWaiting.startedAt at render time; without a periodic tick the
+  // numbers freeze at whatever they were when poolWaiting first
+  // landed. This effect forces a re-render every 1s while searching.
+  useEffect(() => {
+    if (state.appPhase !== "searching") return;
+    const t = setInterval(() => dispatch({ type: "SEARCH_TICK" }), 1000);
+    return () => clearInterval(t);
+  }, [state.appPhase]);
 
   // -------- auth + socket setup --------
   useEffect(() => {
