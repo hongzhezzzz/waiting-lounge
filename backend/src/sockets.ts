@@ -565,6 +565,26 @@ export function registerSocketHandlers(io: Server) {
       runner.handleAction(socket.id, payload.action);
     });
 
+    // Replay current round_start to the requester. Called by the game
+    // page on mount so a client that arrived after round_start was
+    // emitted can sync up. Idempotent — duplicate replays just re-render
+    // the same state.
+    socket.on("request_round_state", (payload: { gameId?: string }) => {
+      const gameId = (payload?.gameId || "").toString();
+      const game = games.get(gameId);
+      if (!game) return;
+      // Only players in this game can request its state. Match by
+      // current socketId or by userId (to handle the rare case where
+      // the player reconnected with a new socket since game start).
+      const isPlayer = game.players.some(
+        (p) => p.socketId === socket.id || (me.userId != null && p.userId === me.userId),
+      );
+      if (!isPlayer) return;
+      const runner = getRunner(gameId);
+      if (!runner) return;
+      runner.replayCurrentState(socket.id);
+    });
+
     socket.on("disconnect", () => {
       removeFromAllQueues(socket.id);
       removeFromGameQueues(socket.id);

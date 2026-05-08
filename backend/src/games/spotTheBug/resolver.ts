@@ -21,9 +21,6 @@ type Snippet = {
 
 const ROUND_TIMEOUT_MS = 45_000;
 const POST_ROUND_PAUSE_MS = 2500;
-// See brainBet/resolver.ts for the rationale. 800 ms gives clients time
-// to navigate after receiving game_started before the first round opens.
-const FIRST_ROUND_DELAY_MS = 800;
 const DISCONNECT_GRACE_MS = 10_000;
 
 const ROUNDS_BY_DURATION: Record<GameDuration, number> = {
@@ -81,11 +78,27 @@ export class SpotTheBugGame implements GameRunner {
   }
 
   start() {
-    // Defer the first round_start so freshly-arriving clients have time
-    // to navigate and subscribe to game_state_update. See brainBet's
-    // resolver for the full reasoning. 800 ms covers Next.js client-side
-    // navigation in the common case while still feeling near-instant.
-    setTimeout(() => this.startRound(), FIRST_ROUND_DELAY_MS);
+    this.startRound();
+  }
+
+  // Replays the current round_start to one specific socket. Called from
+  // the `request_round_state` socket handler when a fresh client mounts
+  // the game page after round_start was already emitted to the room.
+  replayCurrentState(socketId: SocketId): void {
+    if (this.game.resolved) return;
+    const round = this.state.currentRound;
+    if (!round) return;
+    const snippet = SNIPPETS.find((s) => s.id === round.snippetId);
+    if (!snippet) return;
+    this.io.to(socketId).emit("game_state_update", {
+      gameId: this.game.id,
+      type: "round_start",
+      round: round.index,
+      total: round.total,
+      scores: this.publicScores(),
+      snippet: { id: snippet.id, language: snippet.language, code: snippet.code },
+      endsAt: round.endsAt,
+    });
   }
 
   private startRound() {
