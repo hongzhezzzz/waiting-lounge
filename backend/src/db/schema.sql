@@ -100,3 +100,24 @@ create table if not exists device_last_status (
   ts_ms       bigint not null,
   updated_at  timestamptz not null default now()
 );
+
+-- Stage 3b.2 — Daily Brain Bet (Wordle-shape solo puzzle).
+-- One curated 3-round puzzle per UTC day. One attempt per user per day.
+
+create table if not exists daily_brain_bet_attempts (
+  user_id     uuid not null references users(id),
+  date_utc    date not null,
+  score       integer not null,
+  played_at   timestamptz not null default now(),
+  primary key (user_id, date_utc)
+);
+
+create index if not exists daily_brain_bet_attempts_date_idx
+  on daily_brain_bet_attempts (date_utc, score desc);
+
+create table if not exists daily_streaks (
+  user_id          uuid primary key references users(id),
+  current_streak   integer not null default 0,
+  longest_streak   integer not null default 0,
+  last_play_date   date
+);
