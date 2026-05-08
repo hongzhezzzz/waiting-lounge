@@ -22,6 +22,7 @@ import { ChipBar } from "./components/ChipBar.mjs";
 import { BetPhasePanel } from "./components/BetPhasePanel.mjs";
 import { RevealCard } from "./components/RevealCard.mjs";
 import { MatchEndScreen } from "./components/MatchEndScreen.mjs";
+import { ChatPanel } from "./components/ChatPanel.mjs";
 import { IndianPokerRound } from "./components/rounds/IndianPoker.mjs";
 import { PlaceholderRound } from "./components/rounds/Placeholder.mjs";
 import { EstimationRound } from "./components/rounds/Estimation.mjs";
@@ -58,6 +59,11 @@ const initialState = {
   // 4e: confirm dialog (currently only "forfeit") + reconnect banner.
   confirmDialog: null,   // null | "forfeit"
   reconnecting: false,   // socket dropped while in_match; waiting for re-attach
+
+  // 5.1: chat-while-playing.
+  chatMessages: [],      // [{from: "me"|"peer", body, ts}]
+  chatMode: false,       // true → keys go to chatInput, not game
+  chatInput: "",         // in-progress text
 };
 
 function reducer(state, action) {
@@ -122,6 +128,10 @@ function reducer(state, action) {
         stockDir: null,
         resolved: null,
         end: null,
+        // Chat resets on new match.
+        chatMessages: [],
+        chatMode: false,
+        chatInput: "",
       };
     case "ROUND_START": {
       const p = action.payload;
@@ -212,13 +222,39 @@ function reducer(state, action) {
         stockDir: null,
         resolved: null,
         end: null,
+        chatMessages: [],
+        chatMode: false,
+        chatInput: "",
       };
     case "BET_TICK":
       return { ...state, betSecondsLeft: state.betSecondsLeft != null ? Math.max(0, state.betSecondsLeft - 1) : null };
+    case "SEARCH_TICK":
+      // No-op state update — purely to trigger a re-render so
+      // renderSearchTimer recomputes elapsed/botFillIn from Date.now().
+      return { ...state };
     case "SHOW_CONFIRM":
       return { ...state, confirmDialog: action.dialogType };
     case "HIDE_CONFIRM":
       return { ...state, confirmDialog: null };
+    case "CHAT_TOGGLE":
+      return { ...state, chatMode: !state.chatMode, chatInput: "" };
+    case "CHAT_INPUT_APPEND":
+      return { ...state, chatInput: state.chatInput + action.char };
+    case "CHAT_INPUT_BACKSPACE":
+      return { ...state, chatInput: state.chatInput.slice(0, -1) };
+    case "CHAT_SEND":
+      // Optimistic local append + clear input. Backend doesn't echo
+      // own messages, so this is the only render path for our own text.
+      return {
+        ...state,
+        chatMessages: [...state.chatMessages, { from: "me", body: action.body, ts: Date.now() }],
+        chatInput: "",
+      };
+    case "CHAT_RECEIVED":
+      return {
+        ...state,
+        chatMessages: [...state.chatMessages, { from: "peer", body: action.body, ts: action.ts || Date.now() }],
+      };
     default:
       return state;
   }
@@ -245,6 +281,39 @@ function App() {
       } else if (input === "n" || input === "N" || key.escape) {
         dispatch({ type: "HIDE_CONFIRM" });
       }
+      return;
+    }
+
+    // Chat mode: all keys append to chat input; ESC exits, Enter sends.
+    // Game keys (bet tiers, answer keys, Q to quit) are NOT routed
+    // here — the user must ESC out first.
+    if (state.chatMode) {
+      if (key.escape) {
+        dispatch({ type: "CHAT_TOGGLE" });
+        return;
+      }
+      if (key.return) {
+        const body = state.chatInput.trim();
+        if (body && sockRef.current) {
+          try { sockRef.current.emit("chat_message", { body }); } catch {}
+          dispatch({ type: "CHAT_SEND", body });
+        }
+        return;
+      }
+      if (key.backspace || key.delete) {
+        dispatch({ type: "CHAT_INPUT_BACKSPACE" });
+        return;
+      }
+      // Printable single-char input (skip control + modifier-held).
+      if (input && input.length === 1 && !key.ctrl && !key.meta && state.chatInput.length < 500) {
+        dispatch({ type: "CHAT_INPUT_APPEND", char: input });
+      }
+      return;
+    }
+
+    // T toggles chat mode (only meaningful during a match).
+    if ((input === "t" || input === "T") && state.appPhase === "in_match") {
+      dispatch({ type: "CHAT_TOGGLE" });
       return;
     }
 
@@ -314,6 +383,17 @@ function App() {
     const t = setInterval(() => dispatch({ type: "BET_TICK" }), 1000);
     return () => clearInterval(t);
   }, [state.appPhase, state.round?.phase]);
+
+  // -------- search-screen ticker --------
+  // The "Xs elapsed · bot fills in ~Ys" line is computed from
+  // poolWaiting.startedAt at render time; without a periodic tick the
+  // numbers freeze at whatever they were when poolWaiting first
+  // landed. This effect forces a re-render every 1s while searching.
+  useEffect(() => {
+    if (state.appPhase !== "searching") return;
+    const t = setInterval(() => dispatch({ type: "SEARCH_TICK" }), 1000);
+    return () => clearInterval(t);
+  }, [state.appPhase]);
 
   // -------- auth + socket setup --------
   useEffect(() => {
@@ -409,13 +489,16 @@ function App() {
 function hint(state) {
   if (state.confirmDialog) return "[Y] confirm  [N] cancel";
   if (state.reconnecting) return "Reconnecting…  (Q to give up)";
+  if (state.chatMode) return "Typing in chat. Enter = send · ESC = exit chat mode.";
   switch (state.appPhase) {
     case "lobby": return "Press F to find a match. Q to quit.";
     case "searching": return "Press X to cancel queue. Q to quit.";
-    case "in_match":
-      if (state.round?.phase === "bet" && !state.myBet) return "Pick a bet: C/1/2/3/A/F. Q to quit.";
-      if (state.round?.phase === "answer" && !state.myAnswer) return answerHint(state);
-      return "Q to quit (forfeits).";
+    case "in_match": {
+      const chatPart = " · T to chat";
+      if (state.round?.phase === "bet" && !state.myBet) return "Pick a bet: C/1/2/3/A/F." + chatPart + " · Q to quit.";
+      if (state.round?.phase === "answer" && !state.myAnswer) return answerHint(state) + chatPart;
+      return "Q to quit (forfeits)." + chatPart;
+    }
     case "match_end": return "Press any key to return to lobby. Q to quit.";
     case "error": return "Press Q to quit.";
     default: return "Press Q to quit.";
@@ -564,6 +647,14 @@ function renderInMatch(state) {
           peerHandle: match.peerHandle,
         })
       : null,
+
+    h(ChatPanel, {
+      messages: state.chatMessages,
+      chatMode: state.chatMode,
+      chatInput: state.chatInput,
+      myHandle: myHandle || "you",
+      peerHandle: match.peerHandle,
+    }),
   );
 }
 
@@ -712,6 +803,14 @@ function wireSocket(sock, dispatch, getState) {
 
   sock.on("error_message", (msg) => {
     dispatch({ type: "TOAST", message: msg?.message || "error" });
+  });
+
+  // Chat (5.1). Server emits chat_message to the OTHER side only;
+  // own messages are rendered optimistically in CHAT_SEND.
+  sock.on("chat_message", (p) => {
+    if (p?.body) {
+      dispatch({ type: "CHAT_RECEIVED", body: String(p.body), ts: p.ts });
+    }
   });
 
   sock.on("pool_waiting", (p) => {
