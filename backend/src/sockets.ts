@@ -558,6 +558,35 @@ export function registerSocketHandlers(io: Server) {
       }
     });
 
+    // Bot-now: skip the pool wait, start a bot match immediately.
+    // Same preconditions as queue_for_pool. Triggered by the [B] key
+    // in the TUI lobby and the "Play bot now" button on the web lobby.
+    socket.on("start_bot_match_now", async (payload: { gameType?: string }) => {
+      if (!me.userId) {
+        return socket.emit("error_message", { message: "Sign in to play games." });
+      }
+      const gameType = (payload?.gameType || "").toString() as GameType;
+      if (!ALLOWED_GAME_TYPES.includes(gameType)) {
+        return socket.emit("error_message", { message: "Invalid game type." });
+      }
+      if (me.roomId) await cleanupCurrentRoom(socket, me);
+      const balance = await getBalance(me.userId);
+      if (balance == null || balance < POOL_DEFAULT_ANTE) {
+        return socket.emit("error_message", {
+          message: `Not enough points (${balance ?? 0} < ${POOL_DEFAULT_ANTE}).`,
+        });
+      }
+      // Cancel any pending pool-bot timer + remove from any queues —
+      // we're going straight to bot, no waiting room.
+      const existing = poolBotTimers.get(socket.id);
+      if (existing) {
+        clearTimeout(existing);
+        poolBotTimers.delete(socket.id);
+      }
+      removeFromGameQueues(socket.id);
+      startBotMatchFor(io, socket.id, gameType, POOL_DEFAULT_DURATION, POOL_DEFAULT_ANTE);
+    });
+
     socket.on("list_idle_users", () => {
       const list = getIdleUsers(socket.id, me.userId ?? undefined);
       socket.emit("idle_users", { users: list });

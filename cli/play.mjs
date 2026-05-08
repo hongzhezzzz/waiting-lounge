@@ -332,6 +332,11 @@ function App() {
           sockRef.current.emit("queue_for_pool", { gameType: "brain_bet" });
           dispatch({ type: "BEGIN_SEARCH" });
         }
+      } else if (input === "b" || input === "B") {
+        if (sockRef.current) {
+          sockRef.current.emit("start_bot_match_now", { gameType: "brain_bet" });
+          dispatch({ type: "BEGIN_SEARCH" });
+        }
       }
       return;
     }
@@ -496,7 +501,7 @@ function hint(state) {
   if (state.reconnecting) return "Reconnecting…  (Q to give up)";
   if (state.chatMode) return "Typing in chat. Enter = send · ESC = exit chat mode.";
   switch (state.appPhase) {
-    case "lobby": return "Press F to find a match. Q to quit.";
+    case "lobby": return "[F] find a match  [B] bot now  [Q] quit";
     case "searching": return "Press X to cancel queue. Q to quit.";
     case "in_match": {
       const chatPart = " · T to chat";
@@ -554,10 +559,12 @@ function renderScene(state) {
         h(Box, { marginTop: 1 },
           h(Text, { color: "cyan", bold: true }, "[F] Find a match"),
           h(Text, null, "    "),
-          h(Text, { dimColor: true }, "Brain Bet · 5 min · 100-pt ante"),
+          h(Text, { dimColor: true }, "Brain Bet · 5 min · 100-pt ante · 30s bot fallback"),
         ),
-        h(Box, { marginTop: 1 },
-          h(Text, { dimColor: true }, "If no human pairs within 30s, a labeled `lounge-bot-NNN` joins."),
+        h(Box, null,
+          h(Text, { color: "magenta", bold: true }, "[B] Play a bot now"),
+          h(Text, null, "  "),
+          h(Text, { dimColor: true }, "Skip the wait — instant bot match for practice."),
         ),
       );
     case "searching":
