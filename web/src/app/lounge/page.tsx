@@ -5,10 +5,19 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { useBalance } from "@/lib/points";
 import { getSocket } from "@/lib/socket";
+import { getBackendUrl } from "@/lib/backend";
 import { GAMES, GAME_DURATIONS, DEFAULT_ANTE, type GameTypeId, type GameDuration } from "@/lib/fakeData";
+import { LoungeTicker, type RecentEvent } from "@/components/LoungeTicker";
 
 type IdleUser = { handle: string; userId: string; socketId: string };
 type PoolGameType = "brain_bet" | "spot_the_bug";
+type LoungeStats = {
+  idleCount: number;
+  inGameCount: number;
+  postsLastHour: number;
+  topThree: Array<{ handle: string; points: number; rank: number }>;
+  recentEvents: RecentEvent[];
+};
 
 const POOL_GAMES: { id: PoolGameType; label: string }[] = [
   { id: "brain_bet", label: "Brain Bet" },
@@ -27,7 +36,9 @@ export default function LoungePage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [declinedMsg, setDeclinedMsg] = useState<string | null>(null);
   const [poolMatching, setPoolMatching] = useState<PoolGameType | null>(null);
+  const [stats, setStats] = useState<LoungeStats | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const statsPollRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!session) return;
@@ -93,6 +104,30 @@ export default function LoungePage() {
     };
   }, [session]);
 
+  // Lounge stats (counter row + recent ticker + leaderboard top 3).
+  // Polls at 12 s — same cadence as the homepage cards. Single fetch
+  // covers all three UI elements; failures fall through silently.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch(`${getBackendUrl()}/api/lounge/stats`);
+        if (!res.ok) return;
+        const data: LoungeStats = await res.json();
+        if (!cancelled) setStats(data);
+      } catch {
+        // Network blip; next poll catches up.
+      }
+    }
+    load();
+    statsPollRef.current = setInterval(load, 12_000);
+    return () => {
+      cancelled = true;
+      if (statsPollRef.current) clearInterval(statsPollRef.current);
+    };
+  }, [session]);
+
   function findMatch(gameType: PoolGameType) {
     setPoolMatching(gameType);
     getSocket().emit("queue_for_pool", { gameType });
@@ -122,6 +157,12 @@ export default function LoungePage() {
   const canPool = balance >= POOL_ANTE;
   const matchingLabel = poolMatching === "brain_bet" ? "Brain Bet" : poolMatching === "spot_the_bug" ? "Spot the Bug" : "";
 
+  const idle = stats?.idleCount ?? 0;
+  const inGame = stats?.inGameCount ?? 0;
+  const postsLast = stats?.postsLastHour ?? 0;
+  const recentEvents = stats?.recentEvents ?? [];
+  const topThree = stats?.topThree ?? [];
+
   return (
     <div className="max-w-2xl mx-auto px-6 py-12 space-y-6">
       <div>
@@ -129,6 +170,11 @@ export default function LoungePage() {
         <p className="text-sm text-muted">
           Hit Find a match for the fastest pairing, or challenge a specific player below.
         </p>
+        {stats && (
+          <div className="mt-3 text-xs text-muted font-mono">
+            {idle} active · {inGame} game{inGame === 1 ? "" : "s"} in progress · {postsLast} post{postsLast === 1 ? "" : "s"} in the last hour
+          </div>
+        )}
       </div>
 
       {errorMsg && (
@@ -193,8 +239,9 @@ export default function LoungePage() {
         <h2 className="text-xs text-muted uppercase tracking-wider mb-2">Or challenge someone specific</h2>
 
         {idleUsers.length === 0 && (
-          <div className="card p-6 text-center text-muted text-sm">
-            No one else is idle right now. Use Find a match above and we&apos;ll pair you with the next player.
+          <div className="card p-6 text-center text-muted text-sm space-y-1">
+            <div>Pretty quiet right now.</div>
+            <div className="text-xs">Hit Find a match above — you&apos;ll be first in line for whoever shows up next.</div>
           </div>
         )}
 
@@ -215,6 +262,37 @@ export default function LoungePage() {
           </ul>
         )}
       </div>
+
+      {recentEvents.length > 0 && (
+        <div>
+          <h2 className="text-xs text-muted uppercase tracking-wider mb-2">Recent activity</h2>
+          <div className="card p-4">
+            <LoungeTicker events={recentEvents} />
+          </div>
+        </div>
+      )}
+
+      {topThree.length > 0 && (
+        <div>
+          <h2 className="text-xs text-muted uppercase tracking-wider mb-2 flex items-baseline justify-between">
+            <span>Top of the leaderboard</span>
+            <Link href="/leaderboard" className="normal-case tracking-normal text-muted hover:text-ink">
+              See all →
+            </Link>
+          </h2>
+          <ul className="card p-4 space-y-1.5 text-sm">
+            {topThree.map((row) => (
+              <li key={row.handle} className="flex items-baseline justify-between">
+                <span>
+                  <span className="text-muted font-mono">#{row.rank}</span>{" "}
+                  <span className="font-mono text-ink">{row.handle}</span>
+                </span>
+                <span className="text-muted font-mono">{row.points} pts</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {target && (
         <ChallengeModal
