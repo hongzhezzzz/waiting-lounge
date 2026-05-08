@@ -6,7 +6,7 @@ import { getSocket } from "@/lib/socket";
 import { useAuth } from "@/lib/auth";
 import { useInGame } from "@/lib/inGame";
 import { SpotTheBugRound, type Snippet } from "@/components/games/SpotTheBugRound";
-import { BrainBetRound, type BrainBetRoundType } from "@/components/games/BrainBetRound";
+import { BrainBetRound, type BrainBetRoundType, type BrainBetPhase, type BetActionType } from "@/components/games/BrainBetRound";
 import { ChatPanel } from "@/components/games/ChatPanel";
 
 // ---------- shared end-state shapes ----------
@@ -56,6 +56,15 @@ type BrainBetRoundState = {
   roundType: BrainBetRoundType;
   payload: unknown;
   myDecision: unknown;
+  // Iterative-betting state (Brain Bet 2.0). The server emits these
+  // alongside round_start / phase_change / bet_phase_closed.
+  phase: BrainBetPhase;
+  pot: number;
+  chipStacks: Record<string, number>;
+  betWindowEndsAt: number | null;
+  myBet: { type: BetActionType; raise: number } | null;
+  peerBet: { type: BetActionType; raise: number } | null;
+  peerSocketId: string | null;
   resolved?: {
     winnerSocketId: string | null;
     reveal: Record<string, unknown>;
@@ -109,6 +118,10 @@ export default function GameRoomPage() {
 
       if (t === "round_start") {
         if (rt) {
+          // Brain Bet 2.0 — server includes chipStacks, pot, phase from
+          // the start. peerSocketId is whichever socket isn't ours.
+          const chipStacks = (p.chipStacks as Record<string, number>) || {};
+          const peerSocketId = Object.keys(chipStacks).find((s) => s !== mySocketIdRef.current) ?? null;
           setBbRound({
             round: p.round as number,
             total: p.total as number,
@@ -117,6 +130,13 @@ export default function GameRoomPage() {
             roundType: rt,
             payload: p.payload,
             myDecision: null,
+            phase: ((p.phase as BrainBetPhase) ?? "reveal"),
+            pot: (p.pot as number) ?? 0,
+            chipStacks,
+            betWindowEndsAt: null,
+            myBet: null,
+            peerBet: null,
+            peerSocketId,
             resolved: undefined,
           });
         } else {
@@ -130,6 +150,42 @@ export default function GameRoomPage() {
             myClick: null,
           });
         }
+      } else if (t === "phase_change") {
+        const phase = (p.phase as BrainBetPhase | undefined) ?? "reveal";
+        setBbRound((prev) => prev ? {
+          ...prev,
+          phase,
+          // bet phase carries the chip stacks (after forced ante) + pot + window
+          chipStacks: (p.chipStacks as Record<string, number>) ?? prev.chipStacks,
+          pot: (p.pot as number) ?? prev.pot,
+          betWindowEndsAt: phase === "bet" && typeof p.betWindowMs === "number"
+            ? Date.now() + (p.betWindowMs as number)
+            : null,
+          // answer phase carries the new endsAt
+          endsAt: phase === "answer" && typeof p.endsAt === "number"
+            ? (p.endsAt as number)
+            : prev.endsAt,
+        } : prev);
+      } else if (t === "bet_recorded") {
+        // private confirmation of own bet
+        setBbRound((prev) => prev ? {
+          ...prev,
+          myBet: p.bet as { type: BetActionType; raise: number },
+          chipStacks: prev.peerSocketId
+            ? { ...prev.chipStacks, [mySocketIdRef.current ?? ""]: (p.chipStack as number) ?? 0 }
+            : prev.chipStacks,
+          pot: (p.pot as number) ?? prev.pot,
+        } : prev);
+      } else if (t === "bet_phase_closed") {
+        const bets = (p.bets as Record<string, { type: BetActionType; raise: number }>) || {};
+        setBbRound((prev) => prev ? {
+          ...prev,
+          myBet: bets[mySocketIdRef.current ?? ""] ?? prev.myBet,
+          peerBet: prev.peerSocketId ? bets[prev.peerSocketId] ?? null : null,
+          chipStacks: (p.chipStacks as Record<string, number>) ?? prev.chipStacks,
+          pot: (p.pot as number) ?? prev.pot,
+          betWindowEndsAt: null,
+        } : prev);
       } else if (t === "click_recorded") {
         setStbRound((prev) => prev ? { ...prev, myClick: p.line as number } : prev);
       } else if (t === "decision_recorded") {
@@ -143,6 +199,9 @@ export default function GameRoomPage() {
           setBbRound((prev) => prev ? {
             ...prev,
             scores: p.scores as Record<string, number>,
+            chipStacks: (p.chipStacks as Record<string, number>) ?? prev.chipStacks,
+            pot: 0,
+            phase: "showdown",
             resolved: {
               winnerSocketId: p.winnerSocketId as string | null,
               reveal: p.reveal as Record<string, unknown>,
@@ -305,6 +364,14 @@ export default function GameRoomPage() {
           total={bbRound.total}
           endsAt={bbRound.endsAt}
           scores={bbRound.scores}
+          phase={bbRound.phase}
+          pot={bbRound.pot}
+          chipStacks={bbRound.chipStacks}
+          betWindowEndsAt={bbRound.betWindowEndsAt}
+          myBet={bbRound.myBet}
+          peerBet={bbRound.peerBet}
+          mySocketId={mySocketIdRef.current}
+          peerSocketId={bbRound.peerSocketId}
           myHandle={myHandle}
           peerHandle={peerHandle}
           roundType={bbRound.roundType}
@@ -315,6 +382,7 @@ export default function GameRoomPage() {
               ? { ...bbRound.resolved, mySocketId: mySocketIdRef.current }
               : undefined
           }
+          onBet={(choice) => emitAction({ type: "bet", choice })}
           onIndianPoker={(choice) => emitAction({ type: "indian_poker_decide", choice })}
           onEstimation={(value) => emitAction({ type: "estimation_submit", value })}
           onChicken={(value) => emitAction({ type: "chicken_pick", value })}
