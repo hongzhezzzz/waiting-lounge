@@ -3,9 +3,9 @@
 The truth about what currently works — not what is planned. Updated whenever a phase or feature changes state.
 
 ## Current phase
-**Stage 3 complete.** All planned 3a + 3b items shipped to prod. 3c (terminal play, solo Storm) deferred to a Stage 4 decision.
+**Stage 4 complete.** Terminal play (`waiting-lounge play`) shipped — Brain Bet 2.0 plays end-to-end in the terminal across all 7 round types, with auth bridge, match flow, every round renderer, forfeit confirm, reconnect handling, and abort screen.
 
-Live at https://waiting-lounge.vercel.app.
+Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lounge.js play` (terminal).
 
 ## What's live (Stage 1–3)
 
@@ -40,9 +40,19 @@ Live at https://waiting-lounge.vercel.app.
 - **PR #18** — proper fix: client emits `request_round_state` on game-page mount; runner replays current state. Robust against any timing.
 - **PR #17 / #22** — `acknowledge()` clears the needs-attention overlay on Return-to-terminal click; 5-second suppression window for duplicate Notification bursts.
 
-## Deferred to Stage 4 candidate
-- **3c.1 — Terminal play** (`waiting-lounge play`). Estimated ~200–400 LOC. Reason: matching wait is solved by 3a.5 + 3b.3, so TUI is delight, not bottleneck.
-- **3c.2 — Solo Brain Bet Storm** (Lichess pattern). Off-hours solo timed run.
+### Stage 4 (terminal play)
+- **4a** — TUI skeleton (ink + react + socket.io-client). `cli/play.mjs` connects anonymously, shows the device-id prefix, exits cleanly on Q.
+- **4b** — Auth bridge. Browser code-exchange flow at `/cli-pair?code=…`. Token + Supabase config persisted at `~/.waiting-lounge/auth_token` (mode 0600). Auto-refresh against Supabase REST keeps the user authenticated for ~30 days without browser.
+- **4c** — Match flow + Indian Poker. `useReducer` state machine (lobby → searching → in_match → match_end). All Brain Bet 2.0 socket events wired. Indian Poker fully playable; bot fill from 3b.3 carries the rest.
+- **4d** — Remaining 6 round renderers. Estimation/Monty (numeric input), Chicken (1–0), Big-O / Geo (1–N choice keys), Stock Direction (U/D + magnitude with a Unicode-block sparkline at `cli/lib/sparkline.mjs`).
+- **4e** — Polish. Forfeit confirm dialog (Q during in_match → "Forfeit? Y/N"). Reconnect overlay on socket drop. `game_aborted` distinguished on the match-end screen. `/cli-pair` page shows the code tail in a large amber-bordered box.
+
+## Deferred to Stage 5 candidate
+- **5.1 — Daily Brain Bet in TUI.** Solo, 3 rounds, streak update. Reuses round renderers from 4d. ~1 day.
+- **5.2 — Spot the Bug in TUI.** Needs cli-highlight for syntax. ~2 days.
+- **5.3 — Chat-while-playing in TUI.** Input multiplexing is the hard part. ~2 days.
+- **5.4 — Lounge member list + invites in TUI.** Polled list, k/j navigation, Enter to invite.
+- **5.5 — Solo Brain Bet Storm** (Lichess-style timed solo run). Carryover from Stage 4 deferral.
 - **Task #44 — Calibrate forfeit penalty.** Today voluntary leave refunds both antes; future fix should scale by progress + chip lead.
 
 ## Deployment
@@ -58,4 +68,4 @@ npx --yes github:hongzhezzzz/waiting-lounge install
 Paste the printed JSON into `~/.claude/settings.json`, click the printed pair URL once, then `npx --yes github:hongzhezzzz/waiting-lounge test` to confirm.
 
 ## Last updated
-2026-05-08 (Stage 3 complete — all planned 3a + 3b items shipped; 3c deferred).
+2026-05-08 (Stage 4 complete — terminal play `waiting-lounge play` shipped end-to-end across all 7 round types).
