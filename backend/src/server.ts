@@ -15,6 +15,7 @@ import { createMeRouter } from "./routes/me.js";
 import { createLeaderboardRouter } from "./routes/leaderboard.js";
 import { createLoungeStatsRouter } from "./routes/loungeStats.js";
 import { createDailyRouter } from "./routes/daily.js";
+import { createCliAuthRouter } from "./routes/cliAuth.js";
 // Importing games/index registers all game types into the runner registry.
 import "./games/index.js";
 
@@ -38,6 +39,7 @@ app.use("/api/me", createMeRouter());
 app.use("/api/leaderboard", createLeaderboardRouter());
 app.use("/api/lounge", createLoungeStatsRouter());
 app.use("/api/daily", createDailyRouter());
+app.use("/api/cli", createCliAuthRouter());
 
 const server = http.createServer(app);
 const io = new Server(server, {
