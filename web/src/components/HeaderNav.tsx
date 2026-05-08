@@ -20,8 +20,9 @@ export function HeaderNav() {
           <LiveAgentStatusBadge />
           <BalanceChip />
           <nav className="flex items-center gap-5 text-sm text-muted">
-            <Link href="/join" onClick={guard} className="hover:text-ink">Join</Link>
+            <Link href="/lounge" onClick={guard} className="hover:text-ink">Lounge</Link>
             <Link href="/board" onClick={guard} className="hover:text-ink">Board</Link>
+            <Link href="/leaderboard" onClick={guard} className="hover:text-ink">Leaderboard</Link>
             <Link href="/settings" onClick={guard} className="hover:text-ink">About</Link>
           </nav>
         </div>
