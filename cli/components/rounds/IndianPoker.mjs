@@ -8,6 +8,8 @@
 
 import { Box, Text } from "ink";
 import { createElement as h } from "react";
+import { C, B, Key, ROUND_META } from "../../lib/theme.mjs";
+import { PhaseHint, LockedLine } from "./_phaseHint.mjs";
 
 const CARD_NAMES = {
   1: "A", 11: "J", 12: "Q", 13: "K",
@@ -18,26 +20,30 @@ function cardLabel(n) {
 }
 
 export function IndianPokerRound({ payload, phase, myDecision, myHandle, peerHandle }) {
+  const meta = ROUND_META.indian_poker;
   const oppCard = payload?.opponentCard;
 
   return h(Box, { flexDirection: "column", marginTop: 1 },
-    h(Text, { color: "cyan", bold: true }, "🃏 Indian Poker"),
+    h(Text, { color: C.brand, bold: true }, `${meta.icon} ${meta.title}`),
+    h(Text, { dimColor: true }, "Higher card wins. Both fold → no winner. One folds → the other takes it."),
     h(Box, { marginTop: 1 },
-      h(CardBox, { label: "you", value: "?", color: "cyan", handle: myHandle }),
-      h(Box, { marginX: 2 },
+      h(CardBox, { label: "you", value: "?", color: C.brand, handle: myHandle }),
+      h(Box, { marginX: 2, justifyContent: "center" },
         h(Text, { dimColor: true }, "vs"),
       ),
-      h(CardBox, { label: "opponent", value: cardLabel(oppCard), color: "magenta", handle: peerHandle }),
+      h(CardBox, { label: "opponent", value: cardLabel(oppCard), color: C.peer, handle: peerHandle }),
     ),
-    phase === "answer" ? h(Box, { marginTop: 1, flexDirection: "column" },
-      h(Text, { color: "yellow", bold: true }, "Decide:"),
-      h(Box, null,
-        h(Text, { color: myDecision === "bet" ? "green" : "cyan", bold: myDecision === "bet" }, `[B] Bet${myDecision === "bet" ? " ✓" : ""}`),
-        h(Text, null, "    "),
-        h(Text, { color: myDecision === "fold" ? "green" : "cyan", bold: myDecision === "fold" }, `[F] Fold${myDecision === "fold" ? " ✓" : ""}`),
-      ),
-      myDecision ? h(Text, { color: "green" }, `Locked: ${myDecision}. Waiting for opponent…`) : null,
-    ) : phase === "reveal" ? h(Text, { dimColor: true, italic: true }, "Reveal phase — bet phase opens shortly.") : null,
+    phase === "answer"
+      ? (myDecision
+          ? h(LockedLine, null, myDecision)
+          : h(Box, { marginTop: 1 },
+              h(Key, { label: "B" }),
+              h(Text, { color: C.brand, bold: true }, " bet"),
+              h(Text, { dimColor: true }, "     "),
+              h(Key, { label: "F" }),
+              h(Text, { color: C.brand, bold: true }, " fold"),
+            ))
+      : h(PhaseHint, { phase }),
   );
 }
 
@@ -45,7 +51,7 @@ function CardBox({ label, value, color, handle }) {
   return h(Box, { flexDirection: "column", alignItems: "center" },
     h(Text, { dimColor: true }, label),
     h(Box, {
-      borderStyle: "double",
+      borderStyle: B.strong,
       borderColor: color,
       paddingX: 2,
       paddingY: 0,

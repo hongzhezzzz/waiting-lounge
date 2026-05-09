@@ -79,6 +79,34 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Frictionless path:** install tmux once → run `tmux` → start claude inside it. From then on, `waiting-lounge attach` (or `! waiting-lounge attach` from inside claude) opens the lounge anytime.
 - **Limitation:** "open anytime" requires tmux. If claude is running outside tmux on a system without tmux, attach can't help — those users use `waiting-lounge dock` for new sessions.
 
+### Stage 7 (Distribution — Option A: public GitHub)
+- **Public repo** at https://github.com/hongzhezzzz/waiting-lounge.
+- **One-liner install:** `npm install -g github:hongzhezzzz/waiting-lounge` then `waiting-lounge install`.
+- **Path-leak fix:** sanitized `local-hook/README.md` example paths (`/path/to/waiting-lounge`); untracked `.claude/settings.json` (now per-user, gitignored). Verified clean by `git grep`.
+- **Public-facing README** at the repo root: tagline, ASCII dock mockup, install one-liner, quick start, privacy section quoting the actual 4-field hook payload, architecture overview, what's playable, doc pointers.
+- **package.json metadata:** description, homepage, repository, bugs, keywords, LICENSE in `files[]` for clean npm/GitHub previews.
+- **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
+- **`--version` handler** added (was falling through to "Unknown command").
+
+### Stage 8 (TUI polish — design system)
+- **`cli/lib/theme.mjs`** (new) — single source of truth for colors, borders, brand identity, round metadata, and shared components. Color tokens (`C.brand`, `C.success`, `C.warning`, `C.danger`, `C.peer`, `C.link`); border tokens (`B.primary`, `B.panel`, `B.strong`); shared components `Banner`, `Footer`, `Hint`, `Key`, `Title`, `PhasePill`. Six design rules at the top of the file.
+- **Every scene gets a one-line dimmed footer** listing exactly the keys that work right now (`[F] find match  ·  [B] bot now  ·  [Q] quit`). Replaces the previous mix of "Press X" prose, "K = action" lists, and bracket-less keys.
+- **Searching scene** — always shows the bot-fallback line, not just when timer is active. Color shifts cyan as bot fill becomes imminent (≤5s).
+- **Match-end transition** — `MatchEndScreen` now shows "Finalizing match…" placeholder when `state.end` is null, instead of returning `null` and going blank.
+- **Match-end content** — trophy/silver-medal/handshake icons by outcome, formatted final chips (1,180 vs 1180), payout line in outcome color.
+- **Bet-phase timer** — turns red+bold when ≤3s remain. Locked tier shows `✓` next to the key.
+- **Round renderers** — consistent title format (`<icon> <title>` in cyan/bold + dim subtitle), shared `PhaseHint` and `LockedLine` helpers (lifted from 6 round files), Key-component for every keystroke. Indian Poker uses theme color tokens for the card boxes.
+- **CollapsedStrip** — `[^L]` bracketed key (was `^L`), action verb adapts (`enter` mid-match, `open` otherwise), inline mini-key affordances visible in the lobby state.
+- **Multiplexer focus banner** — re-formatted to design system: cyan inverse, brand-key affordance format (`[Ctrl-L] enter the lounge`).
+- **Forfeit confirm dialog** — softer copy ("Forfeit this match?" + "You'll lose the antes already in the pot.") and the standard `[Y] forfeit  ·  [N] keep playing` Footer.
+- **Reconnecting banner** — friendlier copy ("We'll re-sync within 10 seconds. You can keep watching.").
+- **Pairing screen** — "Didn't open? Copy that URL into any browser" fallback hint; code-tail in yellow+bold.
+- **Error screen** — bordered danger box with clear message + retry instruction.
+- **`waiting-lounge help`** — sectioned (Get started · Open the lounge · Integrations · Diagnostics · Maintenance · Privacy promise), self-audit pointer to `local-hook/hook.js`.
+- **`waiting-lounge install`** — sectioned 3-step output (`Step 1 — JSON` / `Step 2 — pair` / `Step 3 — verify`), brand mark, sub-`·` formatted next-steps.
+- **`waiting-lounge status`** — `✓` / `✗` indicators on each check; brand mark.
+- **`waiting-lounge attach`** — Ctrl-B+x clarification: switch focus FIRST (per user's prior observation that Ctrl-B+x can kill claude when claude has focus).
+
 ## Deferred to 6c.2/7
 - **6c.2 — Multiplexer polish.** Real-claude integration testing: alt-screen handling if claude uses it, edge cases on resize, lounge-child crash banner, "design phase" UX issues raised in 6c.1 testing (deferred per user). Validate against macOS Terminal, iTerm2, Linux gnome-terminal, WSL Windows Terminal, ssh into each.
 - **5.2 — Spot the Bug in TUI.** Needs cli-highlight for syntax. ~2 days.
@@ -107,4 +135,4 @@ npm link
 This registers the local clone's `waiting-lounge` binary on your PATH (no sudo needed if your npm prefix points at `~/.npm-global` or similar). Without this, you'd type `node cli/waiting-lounge.js <cmd>` instead of `waiting-lounge <cmd>` — both work.
 
 ## Last updated
-2026-05-08 (Stage 6a + 6b + 6c.1 merged; Stage 6d attach-to-existing-tmux in flight — opens the lounge anytime mid-claude).
+2026-05-08 (Stage 7 Distribution shipped — public repo + one-liner install. Stage 8 TUI polish in flight — design system + every scene polished).

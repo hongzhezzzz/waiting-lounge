@@ -3,38 +3,33 @@
 
 import { Box, Text } from "ink";
 import { createElement as h } from "react";
+import { C, B, ROUND_META } from "../../lib/theme.mjs";
+import { PhaseHint, LockedLine } from "./_phaseHint.mjs";
 
 export function MontyMirageRound({ payload, phase, numericInput, myAnswer }) {
+  const meta = ROUND_META.monty_mirage;
   return h(Box, { flexDirection: "column", marginTop: 1 },
-    h(Text, { color: "cyan", bold: true }, "🎲 Monty Mirage"),
-    payload?.prompt
-      ? h(Box, {
-          marginTop: 1,
-          borderStyle: "single",
-          borderColor: "gray",
-          paddingX: 1,
-          paddingY: 0,
-        },
-          h(Text, null, payload.prompt),
-        )
-      : null,
+    h(Text, { color: C.brand, bold: true }, `${meta.icon} ${meta.title}`),
+    h(Text, { dimColor: true }, "Probability puzzle. Closer to the truth wins."),
+
+    payload?.prompt ? h(Box, {
+      marginTop: 1,
+      borderStyle: B.panel,
+      borderColor: "gray",
+      paddingX: 1,
+      paddingY: 0,
+    },
+      h(Text, null, payload.prompt),
+    ) : null,
 
     phase === "answer"
       ? (myAnswer != null
-          ? h(Box, { marginTop: 1 },
-              h(Text, { color: "green" }, `Locked: ${myAnswer}%. Waiting for opponent…`),
-            )
+          ? h(LockedLine, null, `${myAnswer}%`)
           : h(Box, { marginTop: 1 },
-              h(Text, null, "Probability: "),
-              h(Text, { color: "yellow", bold: true }, numericInput || "_"),
-              h(Text, { dimColor: true }, "% (digits 0–100 + Enter)"),
+              h(Text, null, "probability  "),
+              h(Text, { color: C.warning, bold: true }, numericInput || "_"),
+              h(Text, { dimColor: true }, "%  digits 0–100 + Enter"),
             ))
-      : phase === "bet"
-      ? h(Box, { marginTop: 1 },
-          h(Text, { dimColor: true }, "Bet phase open above; answer phase opens after."),
-        )
-      : h(Box, { marginTop: 1 },
-          h(Text, { dimColor: true }, "Reveal phase — bet phase opens shortly."),
-        ),
+      : h(PhaseHint, { phase }),
   );
 }
