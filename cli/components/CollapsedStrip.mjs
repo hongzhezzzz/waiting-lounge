@@ -41,6 +41,7 @@ export function CollapsedStrip({ state }) {
     h(Text, { dimColor: true }, " · "),
     middle,
     state.reconnecting ? h(Text, { color: "yellow" }, "  ⟳") : null,
-    h(Text, { dimColor: true }, "  ^L expand"),
+    h(Text, { color: "yellow", bold: true }, "  ^L"),
+    h(Text, { dimColor: true }, " to enter & play"),
   );
 }

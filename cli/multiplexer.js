@@ -81,6 +81,29 @@ function clearScreen() {
   process.stdout.write("\x1B[2J\x1B[H");
 }
 
+// Brief visual feedback on focus change (and at startup). Painted into
+// the first row of the bottom region; the lounge child re-renders over
+// it within a frame, but the flash is enough for the user to see which
+// pane just became active. Without this, "I typed and nothing happened"
+// is hard to debug — claude's input echo can land near the lounge strip
+// and look like the lounge took the input.
+function flashFocusIndicator() {
+  const cols = getCols();
+  const row = topHeight() + 1;
+  const target = expanded ? "lounge" : "claude";
+  const tip = expanded
+    ? "▶ Focus: lounge  —  type F (find match), B (bot now), or Ctrl-L to return to claude"
+    : "▶ Focus: claude  —  press Ctrl-L to switch to the lounge and play";
+  process.stdout.write("\x1B7"); // save cursor
+  process.stdout.write(`\x1B[${row};1H`);
+  process.stdout.write("\x1B[2K"); // erase line
+  process.stdout.write("\x1B[7m\x1B[33m"); // inverse + yellow
+  process.stdout.write(tip.slice(0, cols));
+  process.stdout.write("\x1B[0m");
+  process.stdout.write("\x1B8"); // restore cursor
+  return target;
+}
+
 function ensureStateDir() {
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
 }
@@ -186,6 +209,10 @@ function start() {
 
   // Stdin routing: Ctrl-L toggles; otherwise route to focused pane.
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  // Defensive: ensure the stream is in flowing mode so 'data' fires.
+  // setRawMode usually does this implicitly, but on some Node/WSL
+  // combinations the first 'data' has fired and the stream paused.
+  process.stdin.resume();
   process.stdin.on("data", (data) => {
     // Detect Ctrl-L as a single byte (allow it to be in the middle of
     // a chunk too, but only honor a standalone byte for the toggle).
@@ -237,6 +264,10 @@ function start() {
     cleanup();
     process.exit(0);
   });
+
+  // Initial focus flash so the user knows where keystrokes are going
+  // BEFORE they start typing.
+  setTimeout(flashFocusIndicator, 200);
 }
 
 function toggle() {
@@ -245,8 +276,7 @@ function toggle() {
   // repaint on receiving SIGWINCH from the resize.
   clearScreen();
   applyLayout();
-  // Trigger lounge to re-render into the new region size by nudging it
-  // (resize event already does this via SIGWINCH). Same for claude.
+  flashFocusIndicator();
 }
 
 if (require.main === module) {
