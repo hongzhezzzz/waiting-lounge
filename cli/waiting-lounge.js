@@ -358,6 +358,10 @@ async function cmdInstall(args) {
   console.log("");
   console.log("Start a Claude Code session as normal. The header badge in the lounge");
   console.log(`should flip through "Claude is working" → "may be done" automatically.`);
+  console.log("");
+  console.log("Optional next steps:");
+  console.log("  • `waiting-lounge dock` — Claude on top + lounge strip on bottom in one tmux window");
+  console.log("  • Lounge state in Claude Code's statusline — see docs/statusline-setup.md");
 }
 
 function cmdPair() {
@@ -503,6 +507,8 @@ function cmdHelp() {
   console.log("                              Brain Bet without leaving your terminal.");
   console.log("  waiting-lounge dock         Open Claude Code on top + lounge strip on bottom in one");
   console.log("                              tmux window. Ctrl-L expands the strip. (Requires tmux.)");
+  console.log("  waiting-lounge statusline   Print one-line lounge state for Claude Code's statusline");
+  console.log("                              (see docs/statusline-setup.md to wire into settings.json).");
   console.log("  waiting-lounge pair         Print the one-time browser pairing URL");
   console.log("  waiting-lounge status       Show what's installed and whether the backend is reachable");
   console.log("  waiting-lounge test         Send a fake event to the backend; prints what listeners saw");
@@ -535,6 +541,12 @@ const args = process.argv.slice(3);
       // bottom. Press Ctrl-L to expand. cli/dock.js is CJS; loading it
       // runs its dispatcher immediately and blocks until tmux exits.
       require("./dock.js");
+      break;
+    case "statusline":
+      // Stage 6b — print one-line lounge state for Claude Code's
+      // statusline (paste settings.json block from
+      // docs/statusline-setup.md to wire it in).
+      require("./statusline.js");
       break;
     case "pair":
       cmdPair();

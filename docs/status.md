@@ -59,8 +59,14 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **`cli/dock.js`** — tmux orchestrator. `waiting-lounge dock` opens a `wl` tmux session with claude top + lounge bottom. Ctrl-L (configurable) toggles between collapsed and expanded. `WL_DOCK_COLLAPSED_ROWS`, `WL_DOCK_EXPANDED_PCT`, `WL_DOCK_TOGGLE_KEY` are env-driven.
 - **Ground Rule #11** — frictionless-first, locked into CLAUDE.md. Stage 6c (zero-dep PTY multiplexer) is the firm production ship target; Stage 6a is internal beta only.
 
-## Deferred to Stage 6b/6c/7
-- **6b — Statusline strip.** Push lounge state into Claude Code's existing statusline via `waiting-lounge status` script reading `~/.waiting-lounge/state.json`. ~2 days. Works alongside any host (tmux dock, future multiplexer, or no dock at all).
+### Stage 6b (Claude Code statusline integration)
+- **`cli/statusline.js`** — reads `~/.waiting-lounge/state.json` (written by `play.mjs --write-state-to=<path>`) and prints a one-line summary suitable for Claude Code's statusline contract. Falls back to `☕ Lounge: idle` if the file is missing or older than 30 s.
+- **`docs/statusline-setup.md`** — paste-able settings.json block + how to compose with existing statuslines.
+- **Install flow update** — `waiting-lounge install` ends with optional-next-steps lines pointing to `dock` and the statusline doc.
+- **Privacy** — script does no network I/O. Only reads the local lounge state file. No Claude Code content ever touched.
+- Works alongside Stage 6a (the dock writes state) AND alongside Stage 6c (the multiplexer will write the same file).
+
+## Deferred to Stage 6c/7
 - **6c — Zero-dep PTY multiplexer.** Replaces tmux requirement; same dock UX without any setup. Adds `node-pty` dep. ~3 weeks. Production ship target per Ground Rule #11.
 - **5.2 — Spot the Bug in TUI.** Needs cli-highlight for syntax. ~2 days.
 - **5.4 — Lounge member list + invites in TUI.** Polled list, k/j navigation, Enter to invite.
@@ -80,4 +86,4 @@ npx --yes github:hongzhezzzz/waiting-lounge install
 Paste the printed JSON into `~/.claude/settings.json`, click the printed pair URL once, then `npx --yes github:hongzhezzzz/waiting-lounge test` to confirm.
 
 ## Last updated
-2026-05-08 (Stage 5.1 chat-while-playing merged; Stage 6a tmux dock + auto-scroll fix + bot-now in flight as a single PR).
+2026-05-08 (Stage 6a merged + Stage 6b statusline shipping; Stage 6c zero-dep multiplexer up next).
