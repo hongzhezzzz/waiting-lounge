@@ -72,24 +72,34 @@ function ensureStateDir() {
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
 }
 
+function shouldUseMultiplexer() {
+  // Explicit opt-in (env var or flag) — useful for testing the
+  // multiplexer when tmux is also installed.
+  if (process.argv.includes("--no-tmux")) return true;
+  if (process.env.WL_DOCK_NO_TMUX) return true;
+  // Implicit fallback: no tmux on this machine.
+  if (!hasTmux()) return true;
+  return false;
+}
+
 function run() {
-  if (!hasTmux()) {
-    console.error("`waiting-lounge dock` requires tmux for now.");
-    console.error("");
-    console.error("  macOS:  brew install tmux");
-    console.error("  Linux:  sudo apt install tmux  (or sudo dnf install tmux)");
-    console.error("");
-    console.error("Stage 6c will ship a zero-dep dock. For now: install tmux,");
-    console.error("or use `waiting-lounge play` for a full-screen TUI.");
-    process.exit(1);
+  ensureStateDir();
+
+  if (shouldUseMultiplexer()) {
+    // Stage 6c — zero-dep PTY multiplexer. Same UX as tmux dock,
+    // built on node-pty + DECSTBM scrolling region. Loaded only when
+    // needed so users with tmux don't pay the node-pty native-import
+    // cost on every `waiting-lounge dock` invocation.
+    require("./multiplexer.js").start();
+    return;
   }
+
   if (isInsideTmux()) {
     console.error("Already inside a tmux session.");
     console.error("`waiting-lounge dock` creates its own session — run from a regular terminal.");
+    console.error("(Pass --no-tmux to use the zero-dep multiplexer instead.)");
     process.exit(1);
   }
-
-  ensureStateDir();
 
   if (tmuxSilent(["has-session", "-t", SESSION])) {
     spawnSync("tmux", ["attach", "-t", SESSION], { stdio: "inherit" });
