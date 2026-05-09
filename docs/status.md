@@ -3,9 +3,9 @@
 The truth about what currently works — not what is planned. Updated whenever a phase or feature changes state.
 
 ## Current phase
-**Stage 4 complete.** Terminal play (`waiting-lounge play`) shipped — Brain Bet 2.0 plays end-to-end in the terminal across all 7 round types, with auth bridge, match flow, every round renderer, forfeit confirm, reconnect handling, and abort screen.
+**Stage 5.1 complete; Stage 6a (tmux dock beta) shipping.** Chat-while-playing works in both the TUI and the web app. Stage 6a opens Claude Code + the lounge in one tmux window — bottom strip is a 1-row indicator, Ctrl-L expands to ~30%. Auto-scroll regression in `play` is fixed; "Play a bot now" is one keystroke (TUI) / one button (web).
 
-Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lounge.js play` (terminal).
+Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lounge.js {play,dock}` (terminal).
 
 ## What's live (Stage 1–3)
 
@@ -47,10 +47,22 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **4d** — Remaining 6 round renderers. Estimation/Monty (numeric input), Chicken (1–0), Big-O / Geo (1–N choice keys), Stock Direction (U/D + magnitude with a Unicode-block sparkline at `cli/lib/sparkline.mjs`).
 - **4e** — Polish. Forfeit confirm dialog (Q during in_match → "Forfeit? Y/N"). Reconnect overlay on socket drop. `game_aborted` distinguished on the match-end screen. `/cli-pair` page shows the code tail in a large amber-bordered box.
 
-## Deferred to Stage 5 candidate
-- **5.1 — Daily Brain Bet in TUI.** Solo, 3 rounds, streak update. Reuses round renderers from 4d. ~1 day.
+### Stage 5.1 (chat-while-playing)
+- **TUI** — input multiplexing in `useInput`: T enters chat mode (during in_match only), ESC exits, Enter sends. ChatPanel renders constant 7-line height (5 padded slots + always-present input row) — fixes terminal-shake regression that ink produced when the panel grew/shrunk on send. Bodies truncated to 60 chars to prevent wrapping.
+- **Web** — ChatPanel moved from floating bottom-right popup to inline collapsible card below the game; default open=true, localStorage-persisted, unread badge when collapsed.
+- **Lost-fix re-apply** — the SEARCH_TICK elapsed counter that was supposed to ship in 4e never reached origin (silently dropped by `git push` without upstream tracking, then by squash-merge); re-applied on this branch and verified per Ground Rule #10.
+
+### Stage 6a (tmux dock — internal beta)
+- **Auto-scroll fix** — top-level Box gets `height: process.stdout.rows` + `overflow: "hidden"` so ink clips instead of letting the layout grow past visible area. Round transitions no longer scroll the terminal.
+- **Bot-now** — new `start_bot_match_now` socket event reuses `startBotMatchFor`; TUI lobby has [B] key, web lobby has "Play a bot now" button. Skips the 30 s pool wait. Bot games still skip chargeAntes/settleGame per 3b.3 design.
+- **`--dock` and `--write-state-to=<path>` flags** — render switches to the 1-row CollapsedStrip when `process.stdout.rows <= WL_DOCK_COLLAPSED_THRESHOLD` (default 6); state.json snapshot written atomically on every state change for Stage 6b's statusline.
+- **`cli/dock.js`** — tmux orchestrator. `waiting-lounge dock` opens a `wl` tmux session with claude top + lounge bottom. Ctrl-L (configurable) toggles between collapsed and expanded. `WL_DOCK_COLLAPSED_ROWS`, `WL_DOCK_EXPANDED_PCT`, `WL_DOCK_TOGGLE_KEY` are env-driven.
+- **Ground Rule #11** — frictionless-first, locked into CLAUDE.md. Stage 6c (zero-dep PTY multiplexer) is the firm production ship target; Stage 6a is internal beta only.
+
+## Deferred to Stage 6b/6c/7
+- **6b — Statusline strip.** Push lounge state into Claude Code's existing statusline via `waiting-lounge status` script reading `~/.waiting-lounge/state.json`. ~2 days. Works alongside any host (tmux dock, future multiplexer, or no dock at all).
+- **6c — Zero-dep PTY multiplexer.** Replaces tmux requirement; same dock UX without any setup. Adds `node-pty` dep. ~3 weeks. Production ship target per Ground Rule #11.
 - **5.2 — Spot the Bug in TUI.** Needs cli-highlight for syntax. ~2 days.
-- **5.3 — Chat-while-playing in TUI.** Input multiplexing is the hard part. ~2 days.
 - **5.4 — Lounge member list + invites in TUI.** Polled list, k/j navigation, Enter to invite.
 - **5.5 — Solo Brain Bet Storm** (Lichess-style timed solo run). Carryover from Stage 4 deferral.
 - **Task #44 — Calibrate forfeit penalty.** Today voluntary leave refunds both antes; future fix should scale by progress + chip lead.
@@ -68,4 +80,4 @@ npx --yes github:hongzhezzzz/waiting-lounge install
 Paste the printed JSON into `~/.claude/settings.json`, click the printed pair URL once, then `npx --yes github:hongzhezzzz/waiting-lounge test` to confirm.
 
 ## Last updated
-2026-05-08 (Stage 4 complete — terminal play `waiting-lounge play` shipped end-to-end across all 7 round types).
+2026-05-08 (Stage 5.1 chat-while-playing merged; Stage 6a tmux dock + auto-scroll fix + bot-now in flight as a single PR).
