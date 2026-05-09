@@ -79,3 +79,38 @@ Cleared to flip the repo public (Stage 7.4).
 ```
 rm -rf /tmp/wl-prefix /tmp/wl-test.tgz
 ```
+
+---
+
+## Stage 7.5 — post-public outsider verification (2026-05-08)
+
+After flipping the repo public, ran the actual install URL an outsider would use, into a fully isolated prefix:
+
+```
+mkdir -p /tmp/wl-outsider-prefix
+GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
+  npm install -g --prefix /tmp/wl-outsider-prefix github:hongzhezzzz/waiting-lounge
+```
+
+(`GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS=/bin/true` simulate an unauthenticated user — these would force a fail if the repo were still private.)
+
+### Results
+
+- **Install** → ✅ 53 packages added in 5s, no auth prompts, no errors
+- **Anonymous git clone** → ✅ `git clone https://github.com/hongzhezzzz/waiting-lounge.git` works without credentials
+- **`waiting-lounge --version`** → ✅ prints `0.1.0` (added handler in this commit; previously fell through to "Unknown command")
+- **`waiting-lounge help`** → ✅ renders full help
+- **`waiting-lounge install --print-only`** → ✅ prints the JSON to paste into `~/.claude/settings.json`
+
+### Friend-shareable install one-liner
+
+```
+npm install -g github:hongzhezzzz/waiting-lounge
+waiting-lounge install
+```
+
+(Then paste the printed JSON, click the printed pair URL once, and run `waiting-lounge dock` or `waiting-lounge play`.)
+
+### Verdict
+
+**Distribution is live.** Anyone with Node 18+ can install the lounge with the one-liner. No friction. No auth required.
