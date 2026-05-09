@@ -71,10 +71,16 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **`cli/__tests__/multiplexer.test.js`** — 12 unit tests (CJS + node:test) covering CUP/HVP/VPA shifts, Home translation, multi-escape chunks, color preservation, defensive blocks. All passing.
 - **`cli/dock.js`** — `shouldUseMultiplexer()` selects path: opt-in via `--no-tmux` flag or `WL_DOCK_NO_TMUX=1` env, OR implicit fallback when tmux is missing. Default behavior unchanged for users with tmux installed.
 - **Stdin multiplexing** — Ctrl-L (byte 0x0c) toggles between "claude focused" (collapsed bottom, ~1 row) and "lounge focused" (expanded bottom, ~30%). All other input goes to the focused pane.
+- **Focus indicator** — `flashFocusIndicator()` paints a one-line yellow banner in the bottom region's first row at startup and on every toggle ("▶ Focus: claude — press Ctrl-L to switch to the lounge and play"). The lounge re-renders within a frame and overwrites it; the flash is brief but visible at the moment focus changes.
 - Loaded lazily only when chosen, so tmux users don't pay node-pty's native-import cost.
 
+### Stage 6d (attach to existing tmux session)
+- **`cli/attach.js`** (CJS) — `waiting-lounge attach` adds a 1-row lounge strip to the CURRENT tmux session via `tmux split-window -v -l 1 …`. Works mid-session: claude keeps running, the kernel sends it SIGWINCH, claude redraws at smaller size, the lounge appears below.
+- **Frictionless path:** install tmux once → run `tmux` → start claude inside it. From then on, `waiting-lounge attach` (or `! waiting-lounge attach` from inside claude) opens the lounge anytime.
+- **Limitation:** "open anytime" requires tmux. If claude is running outside tmux on a system without tmux, attach can't help — those users use `waiting-lounge dock` for new sessions.
+
 ## Deferred to 6c.2/7
-- **6c.2 — Multiplexer polish.** Real-claude integration testing: alt-screen handling if claude uses it, edge cases on resize, focus indicator, possibly a subtle "border" between regions. Validate against macOS Terminal, iTerm2, Linux gnome-terminal, WSL Windows Terminal, ssh into each.
+- **6c.2 — Multiplexer polish.** Real-claude integration testing: alt-screen handling if claude uses it, edge cases on resize, lounge-child crash banner, "design phase" UX issues raised in 6c.1 testing (deferred per user). Validate against macOS Terminal, iTerm2, Linux gnome-terminal, WSL Windows Terminal, ssh into each.
 - **5.2 — Spot the Bug in TUI.** Needs cli-highlight for syntax. ~2 days.
 - **5.4 — Lounge member list + invites in TUI.** Polled list, k/j navigation, Enter to invite.
 - **5.5 — Solo Brain Bet Storm** (Lichess-style timed solo run). Carryover from Stage 4 deferral.
@@ -93,4 +99,4 @@ npx --yes github:hongzhezzzz/waiting-lounge install
 Paste the printed JSON into `~/.claude/settings.json`, click the printed pair URL once, then `npx --yes github:hongzhezzzz/waiting-lounge test` to confirm.
 
 ## Last updated
-2026-05-08 (Stage 6a + 6b merged; Stage 6c.1 multiplexer in flight as a single PR — interactive lounge in dock without tmux).
+2026-05-08 (Stage 6a + 6b + 6c.1 merged; Stage 6d attach-to-existing-tmux in flight — opens the lounge anytime mid-claude).
