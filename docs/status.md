@@ -66,8 +66,15 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Privacy** — script does no network I/O. Only reads the local lounge state file. No Claude Code content ever touched.
 - Works alongside Stage 6a (the dock writes state) AND alongside Stage 6c (the multiplexer will write the same file).
 
-## Deferred to Stage 6c/7
-- **6c — Zero-dep PTY multiplexer.** Replaces tmux requirement; same dock UX without any setup. Adds `node-pty` dep. ~3 weeks. Production ship target per Ground Rule #11.
+### Stage 6c.1 (zero-dep PTY multiplexer — first cut)
+- **`cli/multiplexer.js`** (CJS) — spawns claude as a PTY child sized to (cols, topHeight) and play.mjs --dock as a second PTY sized to (cols, bottomHeight). Sets DECSTBM scrolling region for the top region; lounge bytes are regex-translated (CUP/HVP/VPA row coordinates shifted by topHeight, dangerous escapes blocked: scroll-region, alt-screen, clear-screen).
+- **`cli/__tests__/multiplexer.test.js`** — 12 unit tests (CJS + node:test) covering CUP/HVP/VPA shifts, Home translation, multi-escape chunks, color preservation, defensive blocks. All passing.
+- **`cli/dock.js`** — `shouldUseMultiplexer()` selects path: opt-in via `--no-tmux` flag or `WL_DOCK_NO_TMUX=1` env, OR implicit fallback when tmux is missing. Default behavior unchanged for users with tmux installed.
+- **Stdin multiplexing** — Ctrl-L (byte 0x0c) toggles between "claude focused" (collapsed bottom, ~1 row) and "lounge focused" (expanded bottom, ~30%). All other input goes to the focused pane.
+- Loaded lazily only when chosen, so tmux users don't pay node-pty's native-import cost.
+
+## Deferred to 6c.2/7
+- **6c.2 — Multiplexer polish.** Real-claude integration testing: alt-screen handling if claude uses it, edge cases on resize, focus indicator, possibly a subtle "border" between regions. Validate against macOS Terminal, iTerm2, Linux gnome-terminal, WSL Windows Terminal, ssh into each.
 - **5.2 — Spot the Bug in TUI.** Needs cli-highlight for syntax. ~2 days.
 - **5.4 — Lounge member list + invites in TUI.** Polled list, k/j navigation, Enter to invite.
 - **5.5 — Solo Brain Bet Storm** (Lichess-style timed solo run). Carryover from Stage 4 deferral.
@@ -86,4 +93,4 @@ npx --yes github:hongzhezzzz/waiting-lounge install
 Paste the printed JSON into `~/.claude/settings.json`, click the printed pair URL once, then `npx --yes github:hongzhezzzz/waiting-lounge test` to confirm.
 
 ## Last updated
-2026-05-08 (Stage 6a merged + Stage 6b statusline shipping; Stage 6c zero-dep multiplexer up next).
+2026-05-08 (Stage 6a + 6b merged; Stage 6c.1 multiplexer in flight as a single PR — interactive lounge in dock without tmux).

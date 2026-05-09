@@ -506,7 +506,9 @@ function cmdHelp() {
   console.log("  waiting-lounge play         Open the terminal lounge — find a match and play");
   console.log("                              Brain Bet without leaving your terminal.");
   console.log("  waiting-lounge dock         Open Claude Code on top + lounge strip on bottom in one");
-  console.log("                              tmux window. Ctrl-L expands the strip. (Requires tmux.)");
+  console.log("                              terminal window. Ctrl-L expands the strip.");
+  console.log("                              Uses tmux if available, falls back to a zero-dep PTY");
+  console.log("                              multiplexer otherwise. Pass --no-tmux to force the latter.");
   console.log("  waiting-lounge statusline   Print one-line lounge state for Claude Code's statusline");
   console.log("                              (see docs/statusline-setup.md to wire into settings.json).");
   console.log("  waiting-lounge pair         Print the one-time browser pairing URL");
