@@ -26,19 +26,19 @@ Add (or merge into the existing `hooks` block):
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node /mnt/c/Users/lucky/Dropbox/ChatApp/local-hook/hook.js start" }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "node /path/to/waiting-lounge/local-hook/hook.js start" }] }
     ],
     "Notification": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node /mnt/c/Users/lucky/Dropbox/ChatApp/local-hook/hook.js attention" }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "node /path/to/waiting-lounge/local-hook/hook.js attention" }] }
     ],
     "Stop": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node /mnt/c/Users/lucky/Dropbox/ChatApp/local-hook/hook.js stop" }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "node /path/to/waiting-lounge/local-hook/hook.js stop" }] }
     ]
   }
 }
 ```
 
-If you run Claude Code from Windows (not WSL), use the Windows path instead: `node C:\\Users\\lucky\\Dropbox\\ChatApp\\local-hook\\hook.js start` (note the doubled backslashes and that `node` must be on the Windows PATH).
+If you run Claude Code from Windows (not WSL), use the Windows path instead: `node C:\\path\\to\\waiting-lounge\\local-hook\\hook.js start` (note the doubled backslashes and that `node` must be on the Windows PATH).
 
 The roadmap warns that Claude Code's hook schema may evolve — if these matchers/event names don't seem to fire, check the current docs at https://code.claude.com/docs/en/hooks and we'll adjust.
 
