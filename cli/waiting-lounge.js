@@ -501,6 +501,8 @@ function cmdHelp() {
   console.log("                              Pass -y to skip the prompt, --print-only to never write.");
   console.log("  waiting-lounge play         Open the terminal lounge — find a match and play");
   console.log("                              Brain Bet without leaving your terminal.");
+  console.log("  waiting-lounge dock         Open Claude Code on top + lounge strip on bottom in one");
+  console.log("                              tmux window. Ctrl-L expands the strip. (Requires tmux.)");
   console.log("  waiting-lounge pair         Print the one-time browser pairing URL");
   console.log("  waiting-lounge status       Show what's installed and whether the backend is reachable");
   console.log("  waiting-lounge test         Send a fake event to the backend; prints what listeners saw");
@@ -526,6 +528,13 @@ const args = process.argv.slice(3);
       // top level; ink + the socket connection keep the event loop alive
       // until the user presses Q (which calls useApp().exit()).
       await import("./play.mjs");
+      break;
+    case "dock":
+      // Stage 6a — open a tmux session with claude in the top pane and
+      // the lounge (`play.mjs --dock`) in a collapsed strip on the
+      // bottom. Press Ctrl-L to expand. cli/dock.js is CJS; loading it
+      // runs its dispatcher immediately and blocks until tmux exits.
+      require("./dock.js");
       break;
     case "pair":
       cmdPair();
