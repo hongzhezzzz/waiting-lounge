@@ -578,6 +578,11 @@ const args = process.argv.slice(3);
     case undefined:
       cmdHelp();
       break;
+    case "version":
+    case "--version":
+    case "-v":
+      console.log(require("../package.json").version);
+      break;
     default:
       console.error(`Unknown command: ${cmd}`);
       console.error('Run "waiting-lounge help" for the list.');
