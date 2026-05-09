@@ -96,7 +96,15 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 ```
 npx --yes github:hongzhezzzz/waiting-lounge install
 ```
-Paste the printed JSON into `~/.claude/settings.json`, click the printed pair URL once, then `npx --yes github:hongzhezzzz/waiting-lounge test` to confirm.
+Paste the printed JSON into `~/.claude/settings.json`, click the printed pair URL once, then `npx --yes github:hongzhezzzz/waiting-lounge test` to confirm. The `npx` form auto-registers `waiting-lounge` on the user's PATH for the duration of the command; for repeated use, the binary lives in their npm global bin once npm caches it.
+
+## Dev setup (one-time, when working from a clone)
+
+After `git clone` + `npm install` in the repo root, run:
+```
+npm link
+```
+This registers the local clone's `waiting-lounge` binary on your PATH (no sudo needed if your npm prefix points at `~/.npm-global` or similar). Without this, you'd type `node cli/waiting-lounge.js <cmd>` instead of `waiting-lounge <cmd>` — both work.
 
 ## Last updated
 2026-05-08 (Stage 6a + 6b + 6c.1 merged; Stage 6d attach-to-existing-tmux in flight — opens the lounge anytime mid-claude).
