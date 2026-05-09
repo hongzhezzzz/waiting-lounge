@@ -1,28 +1,108 @@
-# Waiting Lounge
+# ☕ Waiting Lounge
 
-A lightweight, opt-in social waiting room for people whose coding agents are working. While Claude Code is busy, users can join a temporary anonymous lounge to chat 1-on-1 or post to a short-lived board. When the agent needs attention, the browser alerts them back to the terminal.
+**A companion app for Claude Code: chat, browse, and play games while your agent works — without leaving the terminal.**
 
-## Source documents
-- `waiting_lounge_design_spec.md` — product spec (screens, copy, tone, scope)
-- `waiting_lounge_engineering_roadmap.md` — phased build plan
-- `CLAUDE.md` — instructions for Claude Code working in this repo, including agreed ground rules
+When Claude Code is working, you have idle time. The Waiting Lounge fills that idle time with anonymous chat, a short-lived message board, and turn-based brain games (1v1 or solo against a calibrated bot). When Claude needs your attention, the lounge alerts you back to the terminal.
 
-## Current state
-See [`docs/status.md`](docs/status.md). It's the truth about what works right now.
+## What it looks like
 
-For non-obvious choices we've made along the way, see [`docs/decisions.md`](docs/decisions.md).
-
-## Repo layout
 ```
-local-hook/   Node.js script Claude Code invokes via hooks; sanitizes events
-web/          (planned) Next.js + Tailwind frontend
-backend/      (planned) Express + Socket.IO server
-docs/         status.md and decisions.md
-scripts/      one-shot helpers
+┌─ Claude Code ────────────────────────────────┐
+│ ● Editing src/server.ts ...                  │
+│   tests passing                              │
+│   running build...                           │
+│ > _                                          │
+├─ Lounge ─────────────────────────────────────┤
+│ 💬 chat · vs lilac-stacktrace-782            │
+│ peer: nice raise                             │
+│ Round 2/5 — Indian Poker · pot 250           │
+│ [B]et  [F]old                                │
+└──────────────────────────────────────────────┘
 ```
 
-## Setup so far
-This is a local git repo. There is no GitHub remote yet — we'll add one later if and when we need backup, sharing, or auto-deploy.
+One terminal window, two regions. `Ctrl-L` toggles the lounge between a 1-row indicator and a ~30% pane. Or use the lounge full-screen with `waiting-lounge play`. Or play in the browser at [waiting-lounge.vercel.app](https://waiting-lounge.vercel.app) — same matchmaking pool.
 
-## Privacy promise
-The local hook discards Claude Code's raw payload before anything leaves your machine. No prompts, code, repo paths, transcripts, or tool data are sent anywhere — only an anonymous `{ status, timestamp }`. See `local-hook/README.md`.
+## Install (one line)
+
+```
+npm install -g github:hongzhezzzz/waiting-lounge
+```
+
+Requires Node 18+.
+
+## Quick start
+
+```
+waiting-lounge install     # prints the JSON to paste into ~/.claude/settings.json
+waiting-lounge dock        # claude on top + lounge on bottom in one terminal window
+```
+
+Or, if you already have a claude session running inside `tmux`:
+
+```
+! waiting-lounge attach    # adds a lounge strip to the current tmux session
+```
+
+Or, plain full-screen TUI without claude alongside:
+
+```
+waiting-lounge play
+```
+
+The first run opens a browser to authorize the terminal (one click). Token is saved at `~/.waiting-lounge/auth_token` (mode 0600); subsequent runs skip the browser step.
+
+## Privacy
+
+The local hook is the privacy firewall. **It never sends your prompts, code, file paths, transcripts, working directory, or tool I/O to the backend.** It only sends:
+
+```json
+{ "anonymousDeviceId": "uuid", "status": "waiting | needs_attention | done", "client": "claude-code", "timestamp": 0 }
+```
+
+That's the entire payload. Read [`local-hook/hook.js`](local-hook/hook.js) — it's ~80 lines of Node, no obfuscation. Read it and audit it yourself.
+
+## Optional: lounge state in Claude Code's statusline
+
+See [`docs/statusline-setup.md`](docs/statusline-setup.md) — paste one block into `~/.claude/settings.json` and Claude Code's bottom bar shows your handle, current match, and time remaining (`☕ vs lilac-stacktrace-782 · R3/5 · 18s`).
+
+## Architecture
+
+- **`local-hook/`** — the privacy-firewall hook (Node, no deps). Claude Code invokes it on each `UserPromptSubmit` / `Notification` / `Stop`.
+- **`backend/`** — Node.js + Express + Socket.IO. Anonymous matchmaking, chat, board, game state. Live at `https://waiting-lounge.onrender.com`.
+- **`web/`** — Next.js + Tailwind. Live at `https://waiting-lounge.vercel.app`.
+- **`cli/`** — the terminal client (`waiting-lounge` CLI). Full-screen TUI (ink), tmux dock orchestrator, zero-dep PTY multiplexer fallback, statusline integration.
+
+## What's playable
+
+- **Brain Bet 2.0** — iterative-betting brain games. Each match is 5 rounds; round types include Indian Poker, Estimation, Chicken, Big-O, Geo Trivia, Stock Direction, Monty Mirage. Tier-based betting (Check / Raise / All-in / Fold). Plays in browser or terminal; pool matchmaking pairs you with the next idle human, or a labeled bot after 30s. Hit `[B]` from the lobby for an instant bot match.
+- **Daily Brain Bet** — solo, 3 rounds, same puzzle for everyone each UTC day. Streak counter.
+- **Spot the Bug** (browser only for now) — find the bug in 30 short snippets.
+- **Message board** — 24-hour TTL, report-and-hide, no accounts.
+
+## Documentation
+
+- [`docs/status.md`](docs/status.md) — the truth about what works right now (per-feature, dated)
+- [`docs/decisions.md`](docs/decisions.md) — append-only log of non-obvious design choices
+- [`docs/statusline-setup.md`](docs/statusline-setup.md) — Claude Code statusline integration
+- [`waiting_lounge_design_spec.md`](waiting_lounge_design_spec.md) — original product spec
+- [`waiting_lounge_engineering_roadmap.md`](waiting_lounge_engineering_roadmap.md) — original engineering plan
+- [`CLAUDE.md`](CLAUDE.md) — guardrails for Claude Code working in this repo
+
+## Working on the codebase
+
+```
+git clone https://github.com/hongzhezzzz/waiting-lounge.git
+cd waiting-lounge
+npm install
+npm link        # makes the local clone's `waiting-lounge` command available on PATH
+```
+
+Without `npm link`, you can still invoke the CLI as `node cli/waiting-lounge.js <cmd>`.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+
+## Acknowledgements
+
+Built with [ink](https://github.com/vadimdemedes/ink), [Socket.IO](https://socket.io/), [Next.js](https://nextjs.org/), [Tailwind](https://tailwindcss.com/), [node-pty](https://github.com/microsoft/node-pty), and the official [Supabase](https://supabase.com/) JS client.
