@@ -13,6 +13,7 @@
 // ESM because ink v5 is ESM-only. JSX is intentionally avoided
 // (no build step) — `h(Component, props, ...children)` instead.
 
+import fs from "node:fs";
 import { render, Box, Text, useApp, useInput } from "ink";
 import { createElement as h, useEffect, useReducer, useRef } from "react";
 import { io } from "socket.io-client";
@@ -31,6 +32,22 @@ import { ChickenRound } from "./components/rounds/Chicken.mjs";
 import { BigORound } from "./components/rounds/BigO.mjs";
 import { GeoTriviaRound } from "./components/rounds/GeoTrivia.mjs";
 import { StockDirectionRound } from "./components/rounds/StockDirection.mjs";
+import { CollapsedStrip } from "./components/CollapsedStrip.mjs";
+
+// CLI flags. --dock switches the App into dock-mode rendering
+// (height-conditional: CollapsedStrip when the pane is small, full UI
+// otherwise). --write-state-to=<path> writes a JSON snapshot on every
+// state change so other tools (Claude Code statusline in 6b) can read
+// live state.
+const DOCK_MODE = process.argv.includes("--dock");
+const STATE_FILE = (() => {
+  const arg = process.argv.find((a) => a && a.startsWith("--write-state-to="));
+  return arg ? arg.slice("--write-state-to=".length) : null;
+})();
+// In dock mode, render CollapsedStrip when the pane is this many rows
+// or fewer; render the full UI otherwise. Configurable so the toggle
+// can be tuned without code changes.
+const COLLAPSED_THRESHOLD = parseInt(process.env.WL_DOCK_COLLAPSED_THRESHOLD ?? "6", 10);
 
 const initialState = {
   appPhase: "auth",      // auth|pairing|connecting|lobby|searching|in_match|match_end|error
@@ -332,6 +349,11 @@ function App() {
           sockRef.current.emit("queue_for_pool", { gameType: "brain_bet" });
           dispatch({ type: "BEGIN_SEARCH" });
         }
+      } else if (input === "b" || input === "B") {
+        if (sockRef.current) {
+          sockRef.current.emit("start_bot_match_now", { gameType: "brain_bet" });
+          dispatch({ type: "BEGIN_SEARCH" });
+        }
       }
       return;
     }
@@ -437,8 +459,48 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Stage 6a: write a state snapshot on every change for the statusline
+  // integration in 6b. Atomic write (.tmp + rename) so a concurrent
+  // reader never sees torn JSON. Swallow errors — never crash the
+  // lounge over a write failure.
+  useEffect(() => {
+    if (!STATE_FILE) return;
+    const snapshot = {
+      handle: state.myHandle,
+      email: state.email,
+      appPhase: state.appPhase,
+      roundLabel: state.round ? `R${state.round.round}/${state.round.total}` : null,
+      roundType: state.round?.type ?? null,
+      betSecondsLeft: state.betSecondsLeft,
+      peerHandle: state.match?.peerHandle ?? null,
+      reconnecting: state.reconnecting,
+      ts: Date.now(),
+    };
+    try {
+      const tmp = `${STATE_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(snapshot));
+      fs.renameSync(tmp, STATE_FILE);
+    } catch {
+      // Intentionally swallowed — the lounge must not crash because
+      // a sibling process (or path) made the snapshot write fail.
+    }
+  }, [state]);
+
   // -------- render --------
-  return h(Box, { flexDirection: "column", padding: 1 },
+  // Stage 6a dock mode: when the lounge pane is small (collapsed strip
+  // or accidental tiny resize), render the single-row CollapsedStrip
+  // instead of the full UI. ink re-renders on SIGWINCH, so the toggle
+  // "just works" when tmux resizes the pane.
+  const rows = process.stdout.rows ?? 24;
+  if (DOCK_MODE && rows <= COLLAPSED_THRESHOLD) {
+    return h(CollapsedStrip, { state });
+  }
+  // Cap the top-level Box to terminal height with overflow:"hidden"
+  // so ink clips instead of letting the layout grow past the visible
+  // area — without this, round transitions cause the terminal to
+  // auto-scroll to keep the bottom in view, which reads as the screen
+  // jumping on every new question.
+  return h(Box, { flexDirection: "column", padding: 1, height: rows, overflow: "hidden" },
     h(Box, {
       borderStyle: "round",
       borderColor: "cyan",
@@ -491,7 +553,7 @@ function hint(state) {
   if (state.reconnecting) return "Reconnecting…  (Q to give up)";
   if (state.chatMode) return "Typing in chat. Enter = send · ESC = exit chat mode.";
   switch (state.appPhase) {
-    case "lobby": return "Press F to find a match. Q to quit.";
+    case "lobby": return "[F] find a match  [B] bot now  [Q] quit";
     case "searching": return "Press X to cancel queue. Q to quit.";
     case "in_match": {
       const chatPart = " · T to chat";
@@ -549,10 +611,12 @@ function renderScene(state) {
         h(Box, { marginTop: 1 },
           h(Text, { color: "cyan", bold: true }, "[F] Find a match"),
           h(Text, null, "    "),
-          h(Text, { dimColor: true }, "Brain Bet · 5 min · 100-pt ante"),
+          h(Text, { dimColor: true }, "Brain Bet · 5 min · 100-pt ante · 30s bot fallback"),
         ),
-        h(Box, { marginTop: 1 },
-          h(Text, { dimColor: true }, "If no human pairs within 30s, a labeled `lounge-bot-NNN` joins."),
+        h(Box, null,
+          h(Text, { color: "magenta", bold: true }, "[B] Play a bot now"),
+          h(Text, null, "  "),
+          h(Text, { dimColor: true }, "Skip the wait — instant bot match for practice."),
         ),
       );
     case "searching":

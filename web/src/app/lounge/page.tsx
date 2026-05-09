@@ -132,6 +132,10 @@ export default function LoungePage() {
     setPoolMatching(gameType);
     getSocket().emit("queue_for_pool", { gameType });
   }
+  function botMatchNow(gameType: PoolGameType) {
+    setPoolMatching(gameType);
+    getSocket().emit("start_bot_match_now", { gameType });
+  }
   function cancelMatch() {
     getSocket().emit("cancel_game_queue");
     setPoolMatching(null);
@@ -217,6 +221,14 @@ export default function LoungePage() {
                 {g.label}
               </button>
             ))}
+            <button
+              onClick={() => botMatchNow("brain_bet")}
+              disabled={!canPool || pendingInviteId !== null}
+              className="btn-secondary disabled:opacity-50"
+              title="Skip the wait — instant bot match for practice"
+            >
+              Play a bot now
+            </button>
             {!canPool && (
               <span className="text-xs text-amber-700 self-center">Not enough points (need {POOL_ANTE}).</span>
             )}
