@@ -509,6 +509,9 @@ function cmdHelp() {
   console.log("                              terminal window. Ctrl-L expands the strip.");
   console.log("                              Uses tmux if available, falls back to a zero-dep PTY");
   console.log("                              multiplexer otherwise. Pass --no-tmux to force the latter.");
+  console.log("  waiting-lounge attach       Add a lounge pane to the CURRENT tmux session, mid-claude.");
+  console.log("                              Requires tmux + claude already running inside it. Run from");
+  console.log("                              `! waiting-lounge attach` inside claude, or another pane.");
   console.log("  waiting-lounge statusline   Print one-line lounge state for Claude Code's statusline");
   console.log("                              (see docs/statusline-setup.md to wire into settings.json).");
   console.log("  waiting-lounge pair         Print the one-time browser pairing URL");
@@ -543,6 +546,13 @@ const args = process.argv.slice(3);
       // bottom. Press Ctrl-L to expand. cli/dock.js is CJS; loading it
       // runs its dispatcher immediately and blocks until tmux exits.
       require("./dock.js");
+      break;
+    case "attach":
+      // Stage 6d — add a lounge pane to the CURRENT tmux session. Works
+      // mid-session, no claude restart. Run via `! waiting-lounge attach`
+      // from inside claude (if claude is inside tmux) or from any other
+      // pane in the same tmux session.
+      require("./attach.js");
       break;
     case "statusline":
       // Stage 6b — print one-line lounge state for Claude Code's
