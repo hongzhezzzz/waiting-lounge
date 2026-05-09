@@ -1,14 +1,35 @@
 {
   "name": "waiting-lounge",
   "version": "0.1.0",
-  "description": "Waiting Lounge — a companion app for Claude Code users. CLI installer for the local hook.",
+  "description": "Companion app for Claude Code: chat, browse, and play games while your agent works — without leaving the terminal.",
+  "homepage": "https://github.com/hongzhezzzz/waiting-lounge",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hongzhezzzz/waiting-lounge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hongzhezzzz/waiting-lounge/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "cli",
+    "tui",
+    "tmux",
+    "lounge",
+    "game",
+    "companion",
+    "ink",
+    "terminal"
+  ],
   "bin": {
     "waiting-lounge": "./cli/waiting-lounge.js"
   },
   "files": [
     "cli/",
     "local-hook/hook.js",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
