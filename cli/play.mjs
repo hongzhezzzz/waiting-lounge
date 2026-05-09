@@ -32,16 +32,22 @@ import { ChickenRound } from "./components/rounds/Chicken.mjs";
 import { BigORound } from "./components/rounds/BigO.mjs";
 import { GeoTriviaRound } from "./components/rounds/GeoTrivia.mjs";
 import { StockDirectionRound } from "./components/rounds/StockDirection.mjs";
+import { CollapsedStrip } from "./components/CollapsedStrip.mjs";
 
 // CLI flags. --dock switches the App into dock-mode rendering
-// (height-conditional CollapsedStrip vs full UI; wired in commit 5).
-// --write-state-to=<path> writes a JSON snapshot on every state change
-// so other tools (Claude Code statusline in 6b) can read live state.
+// (height-conditional: CollapsedStrip when the pane is small, full UI
+// otherwise). --write-state-to=<path> writes a JSON snapshot on every
+// state change so other tools (Claude Code statusline in 6b) can read
+// live state.
 const DOCK_MODE = process.argv.includes("--dock");
 const STATE_FILE = (() => {
   const arg = process.argv.find((a) => a && a.startsWith("--write-state-to="));
   return arg ? arg.slice("--write-state-to=".length) : null;
 })();
+// In dock mode, render CollapsedStrip when the pane is this many rows
+// or fewer; render the full UI otherwise. Configurable so the toggle
+// can be tuned without code changes.
+const COLLAPSED_THRESHOLD = parseInt(process.env.WL_DOCK_COLLAPSED_THRESHOLD ?? "6", 10);
 
 const initialState = {
   appPhase: "auth",      // auth|pairing|connecting|lobby|searching|in_match|match_end|error
@@ -481,12 +487,20 @@ function App() {
   }, [state]);
 
   // -------- render --------
+  // Stage 6a dock mode: when the lounge pane is small (collapsed strip
+  // or accidental tiny resize), render the single-row CollapsedStrip
+  // instead of the full UI. ink re-renders on SIGWINCH, so the toggle
+  // "just works" when tmux resizes the pane.
+  const rows = process.stdout.rows ?? 24;
+  if (DOCK_MODE && rows <= COLLAPSED_THRESHOLD) {
+    return h(CollapsedStrip, { state });
+  }
   // Cap the top-level Box to terminal height with overflow:"hidden"
   // so ink clips instead of letting the layout grow past the visible
   // area — without this, round transitions cause the terminal to
   // auto-scroll to keep the bottom in view, which reads as the screen
   // jumping on every new question.
-  return h(Box, { flexDirection: "column", padding: 1, height: process.stdout.rows ?? 24, overflow: "hidden" },
+  return h(Box, { flexDirection: "column", padding: 1, height: rows, overflow: "hidden" },
     h(Box, {
       borderStyle: "round",
       borderColor: "cyan",
