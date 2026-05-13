@@ -25,17 +25,21 @@ One terminal window, two regions. `Ctrl-L` toggles the lounge between a 1-row in
 ## Install (one line)
 
 ```
-npm install -g github:hongzhezzzz/waiting-lounge
+npm install -g github:hongzhezzzz/waiting-lounge && waiting-lounge install
 ```
 
-Requires Node 18+.
+Requires Node 18+. The `install` command wires the Claude Code hooks into `~/.claude/settings.json` automatically (with a timestamped backup of the previous file) and opens the pair URL in your default browser. One click in the browser and the lounge is live. Pass `--print-only` if you'd rather paste the JSON yourself.
 
 ## Quick start
 
 ```
-waiting-lounge install     # prints the JSON to paste into ~/.claude/settings.json
+waiting-lounge install     # wires hooks into ~/.claude/settings.json + opens the pair URL
 waiting-lounge dock        # claude on top + lounge on bottom in one terminal window
 ```
+
+`install` does it all in one step: merges its 4 hook entries into `~/.claude/settings.json` (backing up the previous file), saves an anonymous device id, and pops the pair page open in your browser. One click in the browser and you're done.
+
+Cautious mode: `waiting-lounge install --print-only` prints the JSON without touching your settings, and `--ask` prompts before merging.
 
 Or, if you already have a claude session running inside `tmux`:
 

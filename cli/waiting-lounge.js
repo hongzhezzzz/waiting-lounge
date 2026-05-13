@@ -3,21 +3,29 @@
 // waiting-lounge CLI — installs and configures the local hook.
 //
 // Subcommands:
-//   install      copy hook script + device id, print settings JSON to paste
-//   pair         print the one-time browser pairing URL
+//   install      copy hook script + device id, auto-merge settings.json,
+//                auto-open the pair URL in the browser. Print-only mode
+//                with --print-only.
+//   pair         print the one-time browser pairing URL (and try to open it)
 //   status       show what's installed and reachable
 //   test         POST a fake waiting event to the backend and report
 //   uninstall    remove ~/.waiting-lounge/ and print the settings to delete
 //
-// The CLI never silently edits ~/.claude/settings.json. We print the JSON
-// block; the user pastes it themselves. (Roadmap §9: "Prefer not to silently
-// modify Claude Code settings.")
+// Stage 9 — frictionless one-line install. The CLI auto-merges its 4 hook
+// entries into ~/.claude/settings.json by default (with timestamped backup),
+// auto-opens the pair URL, and prints the URL as fallback. Opt out with
+// --print-only (no settings write, no browser open) or --no-open (no browser).
+// We override the roadmap §9 preference here because:
+//   - The privacy invariant is unchanged (hook only ever sends 4 fields).
+//   - The user explicitly asked for one-line install with no manual paste.
+//   - A timestamped backup is written before any edit, so rollback is one cp.
 
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const https = require("https");
 const readline = require("readline");
+const { spawn } = require("child_process");
 
 // Shared config helpers — also used by cli/play.mjs.
 const {
@@ -135,22 +143,27 @@ function backupSettings(settingsPath) {
   return backupPath;
 }
 
-async function maybeWriteSettings(hookPath, autoYes) {
+async function maybeWriteSettings(hookPath, mode) {
+  // mode: "auto" (default) — write without prompting
+  //       "ask"            — prompt y/N
+  //       "skip"           — don't write
   const settingsPath = path.join(HOME, ".claude", "settings.json");
 
-  let answer = "";
-  if (autoYes) {
-    answer = "y";
-  } else {
-    answer = await ask(
-      `Merge these hooks into ${settingsPath} automatically? [y/N] `,
-    );
-  }
-  const yes = /^(y|yes)$/i.test(answer);
-  if (!yes) {
-    console.log("");
-    console.log("OK — paste the JSON above into ~/.claude/settings.json yourself.");
+  if (mode === "skip") {
     return false;
+  }
+
+  if (mode === "ask") {
+    const answer = await ask(
+      `Merge these hooks into ${settingsPath} automatically? [Y/n] `,
+    );
+    // Default to yes when user just presses Enter.
+    const no = /^(n|no)$/i.test(answer);
+    if (no) {
+      console.log("");
+      console.log("OK — paste the JSON above into ~/.claude/settings.json yourself.");
+      return false;
+    }
   }
 
   // Read existing settings (or treat as empty if missing).
@@ -299,11 +312,63 @@ function getJson(urlString, timeoutMs = 3000) {
   });
 }
 
+// Try to open a URL in the user's default browser. Never throws — the URL
+// is always printed too, so if this no-ops the user can still click the
+// printed link. Returns {tried, command} for the caller to report.
+function openBrowser(url) {
+  const platform = process.platform;
+  let cmd = null;
+  let args = [];
+  try {
+    // WSL: the browser lives on the Windows host, not the Linux VM. xdg-open
+    // either no-ops or pops a "command not found" picker. Prefer cmd.exe.
+    const isWSL = Boolean(
+      process.env.WSL_DISTRO_NAME ||
+        process.env.WSLENV ||
+        (process.env.WSL_INTEROP && process.env.WSL_INTEROP.length > 0),
+    );
+    if (platform === "darwin") {
+      cmd = "open";
+      args = [url];
+    } else if (platform === "win32") {
+      cmd = "cmd";
+      args = ["/c", "start", "", url];
+    } else if (isWSL) {
+      cmd = "cmd.exe";
+      args = ["/c", "start", "", url];
+    } else {
+      // Linux: xdg-open. If $BROWSER is set, prefer that.
+      if (process.env.BROWSER) {
+        cmd = process.env.BROWSER;
+        args = [url];
+      } else {
+        cmd = "xdg-open";
+        args = [url];
+      }
+    }
+    const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+    child.on("error", () => {}); // swallow ENOENT — URL is printed anyway
+    child.unref();
+    return { tried: true, command: cmd };
+  } catch {
+    return { tried: false, command: null };
+  }
+}
+
 // --- subcommands ---
 
 async function cmdInstall(args) {
-  const autoYes = args.includes("--write-settings") || args.includes("-y");
-  const printOnly = args.includes("--print-only");
+  // Mode for settings.json:
+  //   default: auto-merge (no prompt)
+  //   --print-only / --no-write: don't touch settings.json
+  //   --ask: prompt y/N (legacy behavior for cautious users)
+  let settingsMode = "auto";
+  if (args.includes("--print-only") || args.includes("--no-write")) {
+    settingsMode = "skip";
+  } else if (args.includes("--ask")) {
+    settingsMode = "ask";
+  }
+  const openPair = !args.includes("--no-open") && !args.includes("--print-only");
 
   const hookSrc = locateHookSource();
   if (!hookSrc) {
@@ -321,6 +386,7 @@ async function cmdInstall(args) {
 
   const backendUrl = readBackendUrl();
   const frontendUrl = readFrontendUrl();
+  const pairUrl = `${frontendUrl}/pair?d=${deviceId}`;
 
   console.log("");
   console.log("☕ Waiting Lounge installed.");
@@ -332,31 +398,50 @@ async function cmdInstall(args) {
   console.log("");
   console.log("─────────────────────────────────────────────────────────────");
   console.log("");
-  console.log("Step 1 — Hook entries to add to ~/.claude/settings.json:");
-  console.log("");
-  console.log(JSON.stringify(settingsBlock(HOOK_PATH), null, 2));
-  console.log("");
 
-  let merged = false;
-  if (!printOnly) {
-    merged = await maybeWriteSettings(HOOK_PATH, autoYes);
-  }
-
-  if (!merged) {
-    console.log("If your settings.json already has other top-level keys, merge the `hooks` field.");
-    console.log("If `hooks` already has entries, add ours alongside (don't overwrite).");
+  // Step 1 — settings.json.
+  if (settingsMode === "skip") {
+    console.log("Step 1 — Hook entries to add to ~/.claude/settings.json:");
     console.log("");
+    console.log(JSON.stringify(settingsBlock(HOOK_PATH), null, 2));
+    console.log("");
+    console.log("(--print-only: not touching your settings.json. Merge the `hooks` field");
+    console.log(" yourself; if `hooks` already has entries, add ours alongside.)");
+    console.log("");
+  } else {
+    console.log("Step 1 — Wire the Claude Code hooks");
+    console.log("");
+    const merged = await maybeWriteSettings(HOOK_PATH, settingsMode);
+    if (!merged) {
+      // User declined the prompt — print the JSON to paste.
+      console.log("Hook entries to add to ~/.claude/settings.json:");
+      console.log("");
+      console.log(JSON.stringify(settingsBlock(HOOK_PATH), null, 2));
+      console.log("");
+    }
   }
 
-  console.log("Step 2 — Pair your browser (one click, one time):");
+  // Step 2 — pair URL.
+  console.log("Step 2 — Pair your browser (one click, one time)");
   console.log("");
-  console.log(`   ${frontendUrl}/pair?d=${deviceId}`);
+  console.log(`   ${pairUrl}`);
   console.log("");
-  console.log("Step 3 — Verify it works:");
+
+  if (openPair) {
+    const { tried, command } = openBrowser(pairUrl);
+    if (tried) {
+      console.log(`   Opening this URL in your browser (via \`${command}\`)…`);
+      console.log("   If nothing opens, copy the link above into any browser.");
+      console.log("");
+    }
+  }
+
+  // Step 3 — verify.
+  console.log("Step 3 — Verify it works");
   console.log("");
   console.log("   waiting-lounge test");
   console.log("");
-  console.log(`Then start Claude Code as normal — the lounge badge will flip from`);
+  console.log("Then start Claude Code as normal — the lounge badge will flip from");
   console.log(`"Claude is working" → "may be done" automatically.`);
   console.log("");
   console.log("Optional next steps:");
@@ -367,10 +452,14 @@ async function cmdInstall(args) {
   console.log("");
 }
 
-function cmdPair() {
+function cmdPair(args) {
   const deviceId = readOrCreateDeviceId();
   const frontendUrl = readFrontendUrl();
-  console.log(`${frontendUrl}/pair?d=${deviceId}`);
+  const pairUrl = `${frontendUrl}/pair?d=${deviceId}`;
+  console.log(pairUrl);
+  if (!args.includes("--no-open")) {
+    openBrowser(pairUrl);
+  }
 }
 
 async function cmdStatus() {
@@ -504,7 +593,7 @@ function cmdHelp() {
   console.log("   play while your agent works");
   console.log("");
   console.log("Get started");
-  console.log("   waiting-lounge install         set up the hook + print settings JSON to paste");
+  console.log("   waiting-lounge install         wire hooks into ~/.claude/settings.json + open pair URL");
   console.log("   waiting-lounge dock            claude on top + lounge below in one terminal window");
   console.log("");
   console.log("Open the lounge");
@@ -526,7 +615,9 @@ function cmdHelp() {
   console.log("   waiting-lounge pair            print the one-time browser pairing URL");
   console.log("");
   console.log("Maintenance");
-  console.log("   waiting-lounge install -y      auto-merge into ~/.claude/settings.json (with backup)");
+  console.log("   waiting-lounge install         default: auto-wire settings.json (with backup) + open browser");
+  console.log("   waiting-lounge install --ask         prompt before touching settings.json");
+  console.log("   waiting-lounge install --no-open     skip auto-opening the pair URL");
   console.log("   waiting-lounge install --print-only  print JSON only, never touch settings.json");
   console.log("   waiting-lounge uninstall       remove ~/.waiting-lounge/   (--force to skip prompt)");
   console.log("   waiting-lounge --version       print package version");
@@ -575,7 +666,7 @@ const args = process.argv.slice(3);
       require("./statusline.js");
       break;
     case "pair":
-      cmdPair();
+      cmdPair(args);
       break;
     case "status":
       await cmdStatus();
