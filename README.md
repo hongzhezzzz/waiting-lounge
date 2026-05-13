@@ -70,7 +70,7 @@ Or, plain full-screen TUI without claude alongside:
 waiting-lounge play
 ```
 
-The first run opens a browser to authorize the terminal (one click). Token is saved at `~/.waiting-lounge/auth_token` (mode 0600); subsequent runs skip the browser step.
+First-time sign-in (only needed when you pick `[F]` Find-a-match for the points pool — bot games stay anonymous): pick `[B]rowser` to authorize via a tab, or `[T]erminal` to type your email and a 6-digit code without leaving the TUI. Headless boxes auto-pick terminal. Token is saved at `~/.waiting-lounge/auth_token` (mode 0600).
 
 ## Privacy
 

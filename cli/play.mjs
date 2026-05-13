@@ -33,6 +33,7 @@ import { BigORound } from "./components/rounds/BigO.mjs";
 import { GeoTriviaRound } from "./components/rounds/GeoTrivia.mjs";
 import { StockDirectionRound } from "./components/rounds/StockDirection.mjs";
 import { CollapsedStrip } from "./components/CollapsedStrip.mjs";
+import { AuthPrompt } from "./components/AuthPrompt.mjs";
 import { C, B, BRAND, Banner, Footer, Hint, Key, PhasePill } from "./lib/theme.mjs";
 
 // CLI flags. --dock switches the App into dock-mode rendering
@@ -55,12 +56,13 @@ const initialState = {
   // negotiation) rather than "auth" (forced credentials prompt). The
   // "pairing" phase only appears later when the user picks a real-points
   // pool match without a token on disk.
-  appPhase: "connecting", // connecting|pairing|lobby|searching|in_match|match_end|error
+  appPhase: "connecting", // connecting|auth_choice|pairing|lobby|searching|in_match|match_end|error
   email: null,
   myHandle: null,
   mySocketId: null,
   pairUrl: null,
   codeTail: null,
+  authMode: null,         // "choice" | "terminal" — drives AuthPrompt initial phase
   error: null,
   toast: null,
 
@@ -92,10 +94,15 @@ function reducer(state, action) {
   switch (action.type) {
     case "AUTH_PAIRING":
       return { ...state, appPhase: "pairing", pairUrl: action.url, codeTail: action.codeTail };
+    case "OPEN_AUTH_CHOICE":
+      // action.mode: "choice" | "terminal" — opens AuthPrompt with that default.
+      return { ...state, appPhase: "auth_choice", authMode: action.mode };
     case "AUTH_CONNECTING":
       return { ...state, appPhase: "connecting", email: action.email };
     case "AUTH_ERROR":
       return { ...state, appPhase: "error", error: action.error };
+    case "AUTH_CANCELLED":
+      return { ...state, appPhase: "lobby", authMode: null, pairUrl: null, codeTail: null };
     case "SOCKET_CONNECTED":
       return {
         ...state,
@@ -294,6 +301,10 @@ function App() {
 
   // -------- input --------
   useInput((input, key) => {
+    // Stage 10c: AuthPrompt owns its own keystrokes during auth_choice.
+    // Bail out so we don't double-handle (e.g. Q exiting the app while
+    // the user is typing their email).
+    if (state.appPhase === "auth_choice") return;
     // Confirm dialog open: only Y/N (or Enter/Esc) is accepted.
     if (state.confirmDialog) {
       if (input === "y" || input === "Y" || key.return) {
@@ -350,11 +361,14 @@ function App() {
     }
     if (state.appPhase === "lobby") {
       if (input === "f" || input === "F") {
-        // Stage 10b: pool matches require auth (real points). If we don't
-        // have a token yet, trigger the pair flow first; runAuthAndJoinPool
-        // re-emits queue_for_pool once the new socket is up.
+        // Stage 10b/c: pool matches require auth (real points).
         if (!tokenRef.current) {
-          runAuthAndJoinPool();
+          // Stage 10c: open the [B]rowser / [T]erminal choice surface
+          // instead of jumping straight to the browser. Headless boxes
+          // skip the choice and go directly to terminal OTP since
+          // browser is impossible there.
+          const headless = isHeadlessEnv();
+          dispatch({ type: "OPEN_AUTH_CHOICE", mode: headless ? "terminal" : "choice" });
           return;
         }
         if (sockRef.current) {
@@ -474,35 +488,38 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Triggered when the user picks [F] find-a-match while not signed in.
-  // Runs the (browser) pair flow, then disconnects the anonymous socket
-  // and reconnects authenticated, then emits queue_for_pool. The state
-  // machine transitions are: lobby → pairing → connecting → lobby →
-  // searching (queue_for_pool acknowledged).
-  async function runAuthAndJoinPool() {
+  // Common path after either browser OR terminal auth completes: tear
+  // down the anonymous socket, reconnect with the new token, then queue
+  // for pool. socket.io buffers emits until connected, so we can call
+  // sock.emit immediately after creating the connection.
+  function reconnectAndJoinPool(token) {
+    tokenRef.current = token;
+    const email = extractEmailFromJwt(token);
+    try { sockRef.current?.disconnect(); } catch {}
+    dispatch({ type: "AUTH_CONNECTING", email });
+
+    const backendUrl = config.readBackendUrl();
+    const sock = io(backendUrl, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      auth: { token },
+    });
+    sockRef.current = sock;
+    wireSocket(sock, dispatch, () => stateRef.current);
+    sock.emit("queue_for_pool", { gameType: "brain_bet" });
+    dispatch({ type: "BEGIN_SEARCH" });
+  }
+
+  // Browser path: open Supabase via /cli-pair, poll until authorized.
+  // Called when the user picks [B] from the auth_choice surface.
+  async function runBrowserAuthAndJoinPool() {
     try {
       const token = await auth.getAccessToken({
         onPairing: ({ url, codeTail }) =>
           dispatch({ type: "AUTH_PAIRING", url, codeTail }),
       });
-      tokenRef.current = token;
-      const email = extractEmailFromJwt(token);
-      try { sockRef.current?.disconnect(); } catch {}
-      dispatch({ type: "AUTH_CONNECTING", email });
-
-      const backendUrl = config.readBackendUrl();
-      const sock = io(backendUrl, {
-        transports: ["websocket", "polling"],
-        reconnection: true,
-        reconnectionAttempts: 10,
-        auth: { token },
-      });
-      sockRef.current = sock;
-      wireSocket(sock, dispatch, () => stateRef.current);
-      // socket.io buffers emits until connected, so we can queue right
-      // away — no need to wait for "welcome" here.
-      sock.emit("queue_for_pool", { gameType: "brain_bet" });
-      dispatch({ type: "BEGIN_SEARCH" });
+      reconnectAndJoinPool(token);
     } catch (err) {
       dispatch({ type: "AUTH_ERROR", error: err && err.message ? err.message : String(err) });
     }
@@ -549,11 +566,22 @@ function App() {
   // area — without this, round transitions cause the terminal to
   // auto-scroll to keep the bottom in view, which reads as the screen
   // jumping on every new question.
+  // Stage 10c: AuthPrompt is mounted as a peer of renderScene during the
+  // auth_choice phase so it can own its own keyboard input (via useInput).
+  // renderScene returns null for that case to avoid stealing keystrokes.
+  const showAuthPrompt = state.appPhase === "auth_choice";
   return h(Box, { flexDirection: "column", padding: 1, height: rows, overflow: "hidden" },
     h(Banner, null),
 
     h(Box, { marginTop: 1, flexDirection: "column" },
-      renderScene(state),
+      showAuthPrompt
+        ? h(AuthPrompt, {
+            defaultMode: state.authMode === "terminal" ? "email" : "choice",
+            onComplete: ({ accessToken }) => reconnectAndJoinPool(accessToken),
+            onBrowserChosen: () => runBrowserAuthAndJoinPool(),
+            onCancel: () => dispatch({ type: "AUTH_CANCELLED" }),
+          })
+        : renderScene(state),
     ),
 
     state.reconnecting ? h(Box, {
@@ -664,6 +692,11 @@ function renderScene(state) {
         h(Text, { color: C.warning }, "Reading saved credentials…"),
         h(Text, { dimColor: true }, "If this is your first run, the browser will open in a moment."),
       );
+    case "auth_choice":
+      // Stage 10c — the AuthPrompt renders both the B/T picker and the
+      // terminal OTP email/code flow. Browser is just a passthrough to
+      // the existing runBrowserAuthAndJoinPool().
+      return null; // placeholder — actual render happens via dispatch tunnel below
     case "pairing":
       return h(Box, { flexDirection: "column" },
         h(Text, { bold: true, color: C.brand }, "Authorize this terminal"),
@@ -1127,6 +1160,24 @@ function cleanExit(sock, exit) {
     try { sock.disconnect(); } catch {}
   }
   exit();
+}
+
+// Stage 10c — headless detection for terminal-OTP default. macOS / native
+// Windows / WSL always have a graphical display (WSL routes through
+// cmd.exe). On native Linux without $DISPLAY/$WAYLAND_DISPLAY, browser
+// pair is impossible — we default the auth choice to "terminal" so users
+// don't get stuck staring at "We opened this URL…" with no browser open.
+function isHeadlessEnv() {
+  const platform = process.platform;
+  if (platform === "darwin" || platform === "win32") return false;
+  const isWSL = Boolean(
+    process.env.WSL_DISTRO_NAME ||
+      process.env.WSLENV ||
+      (process.env.WSL_INTEROP && process.env.WSL_INTEROP.length > 0),
+  );
+  if (isWSL) return false;
+  if (process.env.BROWSER) return false;
+  return !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
 }
 
 function extractEmailFromJwt(token) {

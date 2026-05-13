@@ -232,6 +232,97 @@ async function browserPairFlow({ onPairing }) {
   throw new Error("Authorization timed out after 5 minutes. Re-run `waiting-lounge play`.");
 }
 
+// ---------- Terminal OTP flow (Stage 10c) ----------
+//
+// Hits Supabase's /auth/v1/otp + /auth/v1/verify REST endpoints directly
+// using the anon key fetched from our backend (publicly-safe value, same
+// one embedded in every browser bundle). Same final token shape as the
+// browser flow, so the rest of the app doesn't care which path the user
+// took.
+
+async function fetchSupabaseConfig() {
+  const backendUrl = config.readBackendUrl();
+  const r = await httpRequest("GET", `${backendUrl}/api/cli/auth/config`, {
+    timeoutMs: 8000,
+  });
+  if (r.status === 503) {
+    throw new Error("Terminal auth not configured on the server. Use the browser flow.");
+  }
+  if (r.status !== 200) {
+    throw new Error(`Couldn't fetch Supabase config (status ${r.status}).`);
+  }
+  const j = JSON.parse(r.body);
+  if (!j.supabaseUrl || !j.supabaseAnonKey) {
+    throw new Error("Server returned incomplete Supabase config.");
+  }
+  return { supabaseUrl: j.supabaseUrl, supabaseAnonKey: j.supabaseAnonKey };
+}
+
+// Step 1 of terminal OTP — ask Supabase to email a 6-digit code.
+async function requestOtp({ supabaseUrl, supabaseAnonKey, email }) {
+  const url = `${supabaseUrl.replace(/\/$/, "")}/auth/v1/otp`;
+  const r = await httpRequest("POST", url, {
+    headers: {
+      "Content-Type": "application/json",
+      apikey: supabaseAnonKey,
+    },
+    // create_user: true → if the user is new, Supabase registers them.
+    body: JSON.stringify({ email, create_user: true }),
+    timeoutMs: 12000,
+  });
+  if (r.status >= 200 && r.status < 300) return { ok: true };
+  if (r.status === 429) {
+    return { ok: false, error: "Too many requests. Wait a minute and try again." };
+  }
+  let detail = "";
+  try { detail = JSON.parse(r.body).msg || JSON.parse(r.body).error_description || ""; } catch {}
+  return { ok: false, error: detail || `Status ${r.status}` };
+}
+
+// Step 2 — verify the code Supabase emailed; on success returns a full
+// session bundle in the same shape browserPairFlow writes to disk.
+async function verifyOtp({ supabaseUrl, supabaseAnonKey, email, code }) {
+  const url = `${supabaseUrl.replace(/\/$/, "")}/auth/v1/verify`;
+  const r = await httpRequest("POST", url, {
+    headers: {
+      "Content-Type": "application/json",
+      apikey: supabaseAnonKey,
+    },
+    body: JSON.stringify({ type: "email", email, token: code }),
+    timeoutMs: 12000,
+  });
+  if (r.status >= 200 && r.status < 300) {
+    const j = JSON.parse(r.body);
+    if (!j.access_token || !j.refresh_token) {
+      return { ok: false, error: "Supabase returned no tokens." };
+    }
+    return {
+      ok: true,
+      accessToken: j.access_token,
+      refreshToken: j.refresh_token,
+      expiresIn: j.expires_in || 3600,
+    };
+  }
+  let detail = "";
+  try { detail = JSON.parse(r.body).msg || JSON.parse(r.body).error_description || ""; } catch {}
+  return { ok: false, error: detail || `Status ${r.status}` };
+}
+
+// Persist the token bundle in the same shape browserPairFlow uses, so
+// refresh + load paths work identically afterward.
+function persistTerminalSession({ supabaseUrl, supabaseAnonKey, accessToken, refreshToken, expiresIn }) {
+  const stored = {
+    accessToken,
+    refreshToken,
+    expiresIn,
+    supabaseUrl,
+    supabaseAnonKey,
+    savedAt: Date.now(),
+  };
+  writeTokenFile(stored);
+  return stored.accessToken;
+}
+
 // ---------- public API ----------
 
 /**
@@ -281,4 +372,9 @@ module.exports = {
   clearTokenFile,
   decodeJwtExp,
   tokenIsValid,
+  // Stage 10c — terminal OTP helpers (used by AuthPrompt component).
+  fetchSupabaseConfig,
+  requestOtp,
+  verifyOtp,
+  persistTerminalSession,
 };
