@@ -125,22 +125,43 @@ function run() {
   spawnSync("tmux", ["attach", "-t", SESSION], { stdio: "inherit" });
 }
 
+// `tmux run-shell -b` fires this in a fresh node process every time the
+// user presses Ctrl-L, so there's no in-memory state to track expand vs
+// collapse — we re-derive it from `pane_height`. On macOS, the second
+// Ctrl-L press can hit a transient pane state where `display-message`
+// fails with a non-zero exit, which used to throw out of tmuxQuery and
+// take this process down with exit code 1. We now guard every query so
+// the worst case is a safe-default toggle, not a crash. (See Stage 10a.)
 function toggle() {
   if (!tmuxSilent(["has-session", "-t", SESSION])) return;
-  const bottomHeight = parseInt(
-    tmuxQuery(["display-message", "-p", "-t", `${SESSION}:.1`, "#{pane_height}"]),
-    10
-  );
-  const clientHeight = parseInt(
-    tmuxQuery(["display-message", "-p", "-t", SESSION, "#{client_height}"]),
-    10
-  );
+  let bottomHeight = COLLAPSED_ROWS;
+  let clientHeight = 24;
+  try {
+    bottomHeight = parseInt(
+      tmuxQuery(["display-message", "-p", "-t", `${SESSION}:.1`, "#{pane_height}"]),
+      10,
+    );
+    if (!Number.isFinite(bottomHeight)) bottomHeight = COLLAPSED_ROWS;
+  } catch {}
+  try {
+    clientHeight = parseInt(
+      tmuxQuery(["display-message", "-p", "-t", SESSION, "#{client_height}"]),
+      10,
+    );
+    if (!Number.isFinite(clientHeight) || clientHeight < 1) clientHeight = 24;
+  } catch {}
   const expanded = Math.max(MIN_EXPANDED_ROWS, Math.floor((clientHeight * EXPANDED_PCT) / 100));
   const isCollapsed = bottomHeight <= COLLAPSED_ROWS + 1;
   const target = isCollapsed ? expanded : COLLAPSED_ROWS;
-  tmuxRun(["resize-pane", "-t", `${SESSION}:.1`, "-y", String(target)]);
-  // Move focus to whichever pane just became active.
-  tmuxRun(["select-pane", "-t", `${SESSION}:.${isCollapsed ? "1" : "0"}`]);
+  // Resize + focus moves are also wrapped — if either fails (rare, but
+  // possible if the pane just died), we exit 0 rather than 1 so tmux
+  // doesn't surface a scary error popup to the user.
+  try {
+    tmuxRun(["resize-pane", "-t", `${SESSION}:.1`, "-y", String(target)]);
+  } catch {}
+  try {
+    tmuxRun(["select-pane", "-t", `${SESSION}:.${isCollapsed ? "1" : "0"}`]);
+  } catch {}
 }
 
 function shellQuote(s) {

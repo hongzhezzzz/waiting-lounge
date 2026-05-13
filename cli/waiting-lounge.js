@@ -25,7 +25,8 @@ const path = require("path");
 const http = require("http");
 const https = require("https");
 const readline = require("readline");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
+const { hasTmux, hasCmd, detectLinuxPackageManager } = require("./lib/tmux.js");
 
 // Shared config helpers — also used by cli/play.mjs.
 const {
@@ -381,6 +382,68 @@ function openBrowser(url) {
   }
 }
 
+// Bundle tmux into `waiting-lounge install` (Stage 10a). The dock command
+// is much smoother with tmux than with the zero-dep multiplexer fallback,
+// so we offer to set it up at install time so users don't have to discover
+// the dependency themselves.
+//
+// Behavior by platform:
+//   - macOS + brew: auto-runs `brew install tmux` (no sudo needed for
+//     user-owned brew prefix). ~15s on first install; brew detects and
+//     skips on subsequent runs.
+//   - macOS without brew: prints a one-line "install brew, then this"
+//     hint, no shell-out.
+//   - Linux/WSL: prints `sudo apt/dnf/pacman/… install tmux` — never
+//     auto-runs sudo. The user types/copies the command themselves.
+//   - Windows: prints "use WSL"; tmux is unavailable natively.
+//
+// Skips entirely when tmux is already installed, OR when --no-install-tmux
+// is passed.
+function ensureTmux(autoInstall) {
+  if (!autoInstall) return;
+  if (hasTmux()) return;
+  const platform = process.platform;
+  if (platform === "darwin") {
+    if (hasCmd("brew")) {
+      console.log("");
+      console.log("Installing tmux (used by `waiting-lounge dock` for the polished split-screen)…");
+      try {
+        execFileSync("brew", ["install", "tmux"], { stdio: "inherit" });
+        console.log("✓ tmux installed.");
+      } catch {
+        console.log("⚠ brew install tmux failed. You can retry manually: brew install tmux");
+        console.log("  (The lounge still works without tmux — the dock falls back to a zero-dep multiplexer.)");
+      }
+    } else {
+      console.log("");
+      console.log("Optional — install tmux for the smoothest `dock` experience:");
+      console.log("   1. Install Homebrew: https://brew.sh");
+      console.log("   2. brew install tmux");
+      console.log("(The lounge still works without tmux — the dock falls back to a zero-dep multiplexer.)");
+    }
+    return;
+  }
+  if (platform === "linux") {
+    const pm = detectLinuxPackageManager();
+    if (pm) {
+      console.log("");
+      console.log("Optional — install tmux for the smoothest `dock` experience:");
+      console.log(`   ${pm.install}`);
+    } else {
+      console.log("");
+      console.log("Optional — install tmux via your distro's package manager for the smoothest `dock` experience.");
+    }
+    console.log("(The lounge still works without tmux — the dock falls back to a zero-dep multiplexer.)");
+    return;
+  }
+  if (platform === "win32") {
+    console.log("");
+    console.log("Heads-up — tmux is not available on native Windows.");
+    console.log("For the polished `dock` experience, run inside WSL2: https://learn.microsoft.com/windows/wsl");
+    console.log("(`waiting-lounge play` works directly from native Windows in a second terminal tab.)");
+  }
+}
+
 // --- subcommands ---
 
 async function cmdInstall(args) {
@@ -395,6 +458,10 @@ async function cmdInstall(args) {
     settingsMode = "ask";
   }
   const openPair = !args.includes("--no-open") && !args.includes("--print-only");
+  // `--no-install-tmux` skips the brew-install / sudo-hint step. `--print-only`
+  // also implies skip — that mode is for users who want the JSON to paste
+  // manually and no other side effects.
+  const installTmux = !args.includes("--no-install-tmux") && !args.includes("--print-only");
 
   const hookSrc = locateHookSource();
   if (!hookSrc) {
@@ -452,6 +519,11 @@ async function cmdInstall(args) {
       console.log("");
     }
   }
+
+  // Step 1.5 — optional tmux bundle (Stage 10a). Runs after settings.json
+  // so the hook works even if the user CTRL-Cs out of the brew install,
+  // and before the pair URL so the printed output flows top-to-bottom.
+  ensureTmux(installTmux);
 
   // Step 2 — pair URL.
   console.log("Step 2 — Pair your browser (one click, one time)");
@@ -684,6 +756,7 @@ function cmdHelp() {
   console.log("   waiting-lounge install --ask         prompt before touching settings.json");
   console.log("   waiting-lounge install --no-open     skip auto-opening the pair URL");
   console.log("                                        (also skipped automatically on headless boxes)");
+  console.log("   waiting-lounge install --no-install-tmux  skip the optional brew install tmux step");
   console.log("   waiting-lounge install --print-only  print JSON only, never touch settings.json");
   console.log("   waiting-lounge uninstall       remove ~/.waiting-lounge/   (--force to skip prompt)");
   console.log("   waiting-lounge --version       print package version");

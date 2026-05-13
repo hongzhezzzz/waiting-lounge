@@ -25,19 +25,11 @@ const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const { hasTmux } = require("./lib/tmux.js");
 
 const PLAY_FILE = path.join(__dirname, "play.mjs");
 const STATE_FILE = path.join(os.homedir(), ".waiting-lounge", "state.json");
 const COLLAPSED_ROWS = Math.max(parseInt(process.env.WL_DOCK_COLLAPSED_ROWS || "1", 10), 1);
-
-function hasTmux() {
-  try {
-    execFileSync("which", ["tmux"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function isInsideTmux() {
   return Boolean(process.env.TMUX);

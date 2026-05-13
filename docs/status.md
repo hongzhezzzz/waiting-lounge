@@ -88,6 +88,16 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 10a (tmux bundled into install + dock toggle stability)
+- **Ctrl-L second-press crash fixed (Q5).** `cli/dock.js`'s `toggle()` handler now wraps both `tmuxQuery` calls and both `tmuxRun` calls in try/catch with safe defaults. Root cause: on macOS, the second toggle in quick succession could hit a transient pane state where `tmux display-message` returned non-zero; the uncaught exception exited the fresh Node process with code 1, which tmux then surfaced to the user. Linux/WSL didn't show this because resize completion is more synchronous. Behavior unchanged on the happy path; safe-default toggle on the unhappy one.
+- **Tmux bundled into `waiting-lounge install` (Q1).** New `ensureTmux()` helper detects missing tmux and:
+  - macOS + brew available → auto-runs `brew install tmux` (no sudo; ~15s first time, instant on re-runs since brew detects)
+  - macOS without brew → prints "install brew (brew.sh), then `brew install tmux`"
+  - Linux/WSL → detects apt/dnf/yum/pacman/zypper/apk and prints the right `sudo` line; never auto-runs sudo
+  - native Windows → points to WSL
+- **`cli/lib/tmux.js`** (new) — shared `hasTmux`, `hasCmd`, `detectLinuxPackageManager`. `cli/attach.js` now imports from here instead of duplicating.
+- **Opt-out flags:** `--no-install-tmux` (skip the brew/sudo step), plus the existing `--print-only` short-circuits everything beyond the JSON print.
+
 ### Stage 9c (cold-start UX + Windows experimental labeling)
 - **Render free-tier cold-start handling.** `waiting-lounge test` and `waiting-lounge status` now do a fast attempt (4–5 s) first; if that times out or returns 502–504/ECONNRESET, they print "Backend may be waking up from sleep (this can take up to 45s)…" and retry once with a generous timeout. Previously, a brand-new user's first `test` would fail with "Couldn't reach the backend (timeout)" if Render had been idle 15+ minutes — looked like a broken install but was just a wake-up.
 - **Silent warmup on install.** `waiting-lounge install` now fires a fire-and-forget `GET /health` to the backend at the very start. By the time the user finishes pasting the pair URL into their browser, the backend is usually warm. Never blocks, never reports errors — pure best-effort polish.

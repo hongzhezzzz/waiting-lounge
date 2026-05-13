@@ -28,7 +28,12 @@ One terminal window, two regions. `Ctrl-L` toggles the lounge between a 1-row in
 npm install -g github:hongzhezzzz/waiting-lounge && waiting-lounge install
 ```
 
-Requires Node 18+. The `install` command wires the Claude Code hooks into `~/.claude/settings.json` automatically (with a timestamped backup of the previous file) and opens the pair URL in your default browser. One click in the browser and the lounge is live. Pass `--print-only` if you'd rather paste the JSON yourself.
+Requires Node 18+. The `install` command:
+1. Wires the Claude Code hooks into `~/.claude/settings.json` (with a timestamped backup of the previous file).
+2. Auto-installs `tmux` if missing — on macOS via `brew install tmux` (no sudo needed); on Linux it prints the right `sudo apt/dnf/…` line for you to copy.
+3. Opens the pair URL in your default browser.
+
+One click in the browser and the lounge is live. Opt-outs: `--print-only` (JSON only, nothing else), `--no-install-tmux` (skip the brew/sudo line), `--no-open` (don't open the browser).
 
 ### Supported platforms
 
