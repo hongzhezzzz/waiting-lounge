@@ -88,6 +88,13 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 10b (defer auth until pool match)
+- **Anonymous-by-default opening.** `waiting-lounge play/dock/attach` now lands the user in the lobby anonymously — no email prompt, no browser tab, just their generated handle (`blue-cursor-241`-style). Initial `appPhase` in `cli/play.mjs` changed from `"auth"` to `"connecting"`, and the auth+socket effect now reads existing token if present, otherwise connects anonymously.
+- **Bot matches work anonymously.** Backend `start_bot_match_now` no longer requires `me.userId`; `startBotMatchFor` accepts a synthetic `anon:${socket.id}` userId. Per Stage 3b.3, bot matches already skip `chargeAntes`/`settleGame` entirely — no platform points move regardless — so allowing anonymous play here is zero-risk.
+- **Pool match (`[F] find a match`) triggers auth lazily.** New `runAuthAndJoinPool()` helper in `play.mjs` runs the browser pair flow, disconnects the anonymous socket, reconnects with the new token, and emits `queue_for_pool`. State machine: `lobby → pairing → connecting → lobby → searching`.
+- **Lobby UX cues.** When anonymous, the identity row shows `○ anonymous · handle blue-cursor-241` (warning color, hollow dot), `[F]` is annotated `(signs you in first)`, `[B]` is annotated `(no sign-in needed)`. Once signed in, hint disappears and the dot turns green.
+- **No backend storage change.** Anonymous sockets generate synthetic userIds only for in-memory match state; nothing persists to Postgres (existing bot-match invariant).
+
 ### Stage 10a (tmux bundled into install + dock toggle stability)
 - **Ctrl-L second-press crash fixed (Q5).** `cli/dock.js`'s `toggle()` handler now wraps both `tmuxQuery` calls and both `tmuxRun` calls in try/catch with safe defaults. Root cause: on macOS, the second toggle in quick succession could hit a transient pane state where `tmux display-message` returned non-zero; the uncaught exception exited the fresh Node process with code 1, which tmux then surfaced to the user. Linux/WSL didn't show this because resize completion is more synchronous. Behavior unchanged on the happy path; safe-default toggle on the unhappy one.
 - **Tmux bundled into `waiting-lounge install` (Q1).** New `ensureTmux()` helper detects missing tmux and:
