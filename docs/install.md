@@ -46,7 +46,7 @@ Token is saved at `~/.waiting-lounge/auth_token` (mode 0600). Refresh is automat
 | Command | What it does |
 |---------|--------------|
 | `waiting-lounge dock` | claude on top + lounge strip on bottom in one terminal window. `Ctrl-L` toggles the strip ↔ ~30% pane. |
-| `waiting-lounge attach` | adds a lounge strip to the CURRENT tmux session (run via `! waiting-lounge attach` from inside claude). |
+| `waiting-lounge attach` | adds a 1-row lounge strip to the CURRENT tmux session (run via `! waiting-lounge attach` from inside claude). Press `Ctrl-L` (no prefix) to expand the strip and focus it, press again to collapse + return focus to claude. |
 | `waiting-lounge play` | full-screen lounge in this terminal (no claude alongside). |
 
 ## Diagnostics
