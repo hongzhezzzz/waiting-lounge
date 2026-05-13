@@ -78,11 +78,15 @@ function run() {
   const cmd = `node ${shellQuote(PLAY_FILE)} --dock --write-state-to=${shellQuote(STATE_FILE)}`;
   // -v = vertical split (top/bottom). -l = new pane size in rows.
   execFileSync("tmux", ["split-window", "-v", "-l", String(COLLAPSED_ROWS), cmd], { stdio: "inherit" });
-  console.log("☕ Lounge attached as a 1-row strip below the current pane.");
   console.log("");
-  console.log("Navigate panes:  Ctrl-B then ↑/↓");
-  console.log("Resize lounge:   Ctrl-B then Ctrl-↑/↓ (hold Ctrl, repeat)");
-  console.log("Close lounge:    Ctrl-B then x  (in the lounge pane) — or Q from inside the lounge");
+  console.log("  ☕ Lounge attached as a 1-row strip below the current pane.");
+  console.log("");
+  console.log("  Switch focus    Ctrl-B then ↑   (claude)");
+  console.log("                  Ctrl-B then ↓   (lounge)");
+  console.log("  Resize lounge   Ctrl-B then Ctrl-↑ / Ctrl-↓   (hold Ctrl, repeat)");
+  console.log("  Close lounge    focus the lounge pane FIRST, then Ctrl-B then x");
+  console.log("                  (or press Q from inside the lounge)");
+  console.log("");
 }
 
 // Loaded via `require("./attach.js")` from cli/waiting-lounge.js's

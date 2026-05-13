@@ -323,16 +323,16 @@ async function cmdInstall(args) {
   const frontendUrl = readFrontendUrl();
 
   console.log("");
-  console.log("Waiting Lounge installed.");
+  console.log("☕ Waiting Lounge installed.");
   console.log("");
-  console.log(`  Hook script:  ${HOOK_PATH}`);
-  console.log(`  Device ID:    ${deviceId.slice(0, 8)}…  (kept private at ${DEVICE_ID_PATH})`);
-  console.log(`  Backend:      ${backendUrl}`);
-  console.log(`  Frontend:     ${frontendUrl}`);
+  console.log(`   hook script   ${HOOK_PATH}`);
+  console.log(`   device id     ${deviceId.slice(0, 8)}…  (private, at ${DEVICE_ID_PATH})`);
+  console.log(`   backend       ${backendUrl}`);
+  console.log(`   frontend      ${frontendUrl}`);
   console.log("");
-  console.log("---");
+  console.log("─────────────────────────────────────────────────────────────");
   console.log("");
-  console.log("Hook entries to add to ~/.claude/settings.json:");
+  console.log("Step 1 — Hook entries to add to ~/.claude/settings.json:");
   console.log("");
   console.log(JSON.stringify(settingsBlock(HOOK_PATH), null, 2));
   console.log("");
@@ -348,20 +348,23 @@ async function cmdInstall(args) {
     console.log("");
   }
 
-  console.log("Pair your browser (one click, one time):");
+  console.log("Step 2 — Pair your browser (one click, one time):");
   console.log("");
-  console.log(`  ${frontendUrl}/pair?d=${deviceId}`);
+  console.log(`   ${frontendUrl}/pair?d=${deviceId}`);
   console.log("");
-  console.log("Then verify with:");
+  console.log("Step 3 — Verify it works:");
   console.log("");
-  console.log("  waiting-lounge test");
+  console.log("   waiting-lounge test");
   console.log("");
-  console.log("Start a Claude Code session as normal. The header badge in the lounge");
-  console.log(`should flip through "Claude is working" → "may be done" automatically.`);
+  console.log(`Then start Claude Code as normal — the lounge badge will flip from`);
+  console.log(`"Claude is working" → "may be done" automatically.`);
   console.log("");
   console.log("Optional next steps:");
-  console.log("  • `waiting-lounge dock` — Claude on top + lounge strip on bottom in one tmux window");
-  console.log("  • Lounge state in Claude Code's statusline — see docs/statusline-setup.md");
+  console.log("   ·  waiting-lounge dock      claude on top + lounge below in one window");
+  console.log("   ·  waiting-lounge attach    add a lounge strip to an existing tmux session");
+  console.log("   ·  waiting-lounge play      full-screen lounge (no claude alongside)");
+  console.log("   ·  Statusline integration   see docs/statusline-setup.md");
+  console.log("");
 }
 
 function cmdPair() {
@@ -378,20 +381,20 @@ async function cmdStatus() {
   const frontendUrl = readFrontendUrl();
 
   console.log("");
-  console.log("Waiting Lounge — status");
+  console.log("☕ Waiting Lounge — status");
   console.log("");
-  console.log(`  Config dir:     ${dirExists ? "yes" : "no"}  (${CONFIG_DIR})`);
-  console.log(`  Hook script:    ${hookExists ? "yes" : "no"}  (${HOOK_PATH})`);
-  console.log(`  Device ID:      ${idExists ? readOrCreateDeviceId().slice(0, 8) + "…" : "no"}`);
-  console.log(`  Backend URL:    ${backendUrl}`);
-  console.log(`  Frontend URL:   ${frontendUrl}`);
+  console.log(`   config dir     ${dirExists ? "✓" : "✗"}   ${CONFIG_DIR}`);
+  console.log(`   hook script    ${hookExists ? "✓" : "✗"}   ${HOOK_PATH}`);
+  console.log(`   device id      ${idExists ? "✓ " + readOrCreateDeviceId().slice(0, 8) + "…" : "✗ not found"}`);
+  console.log(`   backend        ${backendUrl}`);
+  console.log(`   frontend       ${frontendUrl}`);
 
   // Ping the backend.
   const health = await getJson(`${backendUrl}/health`, 4000);
   if (health.ok) {
-    console.log(`  Backend reach:  yes  (${health.status})`);
+    console.log(`   backend reach  ✓   ${health.status} OK`);
   } else {
-    console.log(`  Backend reach:  no   (${health.error || health.status})`);
+    console.log(`   backend reach  ✗   ${health.error || health.status}`);
   }
 
   // Look at ~/.claude/settings.json for our hook entries.
@@ -400,12 +403,12 @@ async function cmdStatus() {
     try {
       const txt = fs.readFileSync(settingsPath, "utf8");
       const hookHit = txt.includes(HOOK_PATH);
-      console.log(`  Settings.json:  ${hookHit ? "wired up" : "no waiting-lounge hooks found"}  (${settingsPath})`);
+      console.log(`   settings.json  ${hookHit ? "✓ hooks wired" : "✗ no waiting-lounge hooks"}   ${settingsPath}`);
     } catch (err) {
-      console.log(`  Settings.json:  unreadable (${err.message})`);
+      console.log(`   settings.json  ✗ unreadable (${err.message})`);
     }
   } else {
-    console.log(`  Settings.json:  not found (${settingsPath})`);
+    console.log(`   settings.json  ✗ not found   ${settingsPath}`);
   }
 
   console.log("");
@@ -497,30 +500,41 @@ function cmdUninstall(args) {
 
 function cmdHelp() {
   console.log("");
-  console.log("waiting-lounge — companion app for Claude Code");
+  console.log("☕ Waiting Lounge — companion app for Claude Code");
+  console.log("   play while your agent works");
   console.log("");
-  console.log("Usage:");
-  console.log("  waiting-lounge install      Install the local hook. Prompts to merge into");
-  console.log("                              ~/.claude/settings.json automatically (with backup).");
-  console.log("                              Pass -y to skip the prompt, --print-only to never write.");
-  console.log("  waiting-lounge play         Open the terminal lounge — find a match and play");
-  console.log("                              Brain Bet without leaving your terminal.");
-  console.log("  waiting-lounge dock         Open Claude Code on top + lounge strip on bottom in one");
-  console.log("                              terminal window. Ctrl-L expands the strip.");
-  console.log("                              Uses tmux if available, falls back to a zero-dep PTY");
-  console.log("                              multiplexer otherwise. Pass --no-tmux to force the latter.");
-  console.log("  waiting-lounge attach       Add a lounge pane to the CURRENT tmux session, mid-claude.");
-  console.log("                              Requires tmux + claude already running inside it. Run from");
-  console.log("                              `! waiting-lounge attach` inside claude, or another pane.");
-  console.log("  waiting-lounge statusline   Print one-line lounge state for Claude Code's statusline");
-  console.log("                              (see docs/statusline-setup.md to wire into settings.json).");
-  console.log("  waiting-lounge pair         Print the one-time browser pairing URL");
-  console.log("  waiting-lounge status       Show what's installed and whether the backend is reachable");
-  console.log("  waiting-lounge test         Send a fake event to the backend; prints what listeners saw");
-  console.log("  waiting-lounge uninstall    Remove ~/.waiting-lounge/ (use --force to confirm)");
+  console.log("Get started");
+  console.log("   waiting-lounge install         set up the hook + print settings JSON to paste");
+  console.log("   waiting-lounge dock            claude on top + lounge below in one terminal window");
   console.log("");
-  console.log("Privacy: the hook never sends prompts, code, paths, transcripts, or tool I/O.");
-  console.log("Only an anonymous device id and one of {waiting, needs_attention, done}.");
+  console.log("Open the lounge");
+  console.log("   waiting-lounge play            full-screen lounge (no claude alongside)");
+  console.log("   waiting-lounge dock            new terminal session, claude top + lounge bottom");
+  console.log("                                  Ctrl-L toggles strip ↔ ~30% pane");
+  console.log("                                  Uses tmux if available; otherwise zero-dep PTY mux.");
+  console.log("                                  --no-tmux forces the multiplexer.");
+  console.log("   waiting-lounge attach          add a lounge strip to the CURRENT tmux session");
+  console.log("                                  (run from `! waiting-lounge attach` inside claude)");
+  console.log("");
+  console.log("Integrations");
+  console.log("   waiting-lounge statusline      one-line lounge state for Claude Code's statusline");
+  console.log("                                  (see docs/statusline-setup.md to wire it in)");
+  console.log("");
+  console.log("Diagnostics");
+  console.log("   waiting-lounge status          show what's installed + check backend reachability");
+  console.log("   waiting-lounge test            send a fake event; print what backend received");
+  console.log("   waiting-lounge pair            print the one-time browser pairing URL");
+  console.log("");
+  console.log("Maintenance");
+  console.log("   waiting-lounge install -y      auto-merge into ~/.claude/settings.json (with backup)");
+  console.log("   waiting-lounge install --print-only  print JSON only, never touch settings.json");
+  console.log("   waiting-lounge uninstall       remove ~/.waiting-lounge/   (--force to skip prompt)");
+  console.log("   waiting-lounge --version       print package version");
+  console.log("");
+  console.log("Privacy promise");
+  console.log("   The hook never sends prompts, code, paths, transcripts, or tool I/O.");
+  console.log("   It only sends an anonymous device id and one of: waiting · needs_attention · done.");
+  console.log("   Read it yourself: cli/lib/config.js · local-hook/hook.js (~80 lines, no obfuscation).");
   console.log("");
 }
 

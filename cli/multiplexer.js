@@ -90,18 +90,16 @@ function clearScreen() {
 function flashFocusIndicator() {
   const cols = getCols();
   const row = topHeight() + 1;
-  const target = expanded ? "lounge" : "claude";
   const tip = expanded
-    ? "▶ Focus: lounge  —  type F (find match), B (bot now), or Ctrl-L to return to claude"
-    : "▶ Focus: claude  —  press Ctrl-L to switch to the lounge and play";
+    ? "▶ focus: lounge   ·   [F] find   [B] bot   [Ctrl-L] back to claude"
+    : "▶ focus: claude   ·   [Ctrl-L] enter the lounge and play";
   process.stdout.write("\x1B7"); // save cursor
   process.stdout.write(`\x1B[${row};1H`);
   process.stdout.write("\x1B[2K"); // erase line
-  process.stdout.write("\x1B[7m\x1B[33m"); // inverse + yellow
+  process.stdout.write("\x1B[7m\x1B[36m"); // inverse + cyan (brand color)
   process.stdout.write(tip.slice(0, cols));
   process.stdout.write("\x1B[0m");
   process.stdout.write("\x1B8"); // restore cursor
-  return target;
 }
 
 function ensureStateDir() {

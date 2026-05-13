@@ -1,10 +1,11 @@
 // RevealCard — post-resolve display. Shows the round's truth, both
-// players' submissions, and a chip-flow line. Mirrors the browser's
-// per-round-type reveal blocks in BrainBetRound.tsx.
+// players' submissions, and a chip-flow line. Border color matches
+// outcome (green win, red loss, yellow tie).
 
 import { Box, Text } from "ink";
 import { createElement as h } from "react";
 import { sparkline } from "../lib/sparkline.mjs";
+import { C, B } from "../lib/theme.mjs";
 
 export function RevealCard({ resolved, mySocketId, peerSocketId, myHandle, peerHandle }) {
   if (!resolved) return null;
@@ -14,21 +15,26 @@ export function RevealCard({ resolved, mySocketId, peerSocketId, myHandle, peerH
   const peerDelta = chipDelta?.[peerSocketId] ?? 0;
 
   let header;
+  let borderColor;
   if (winnerSocketId === mySocketId) {
-    header = h(Text, { color: "green", bold: true }, `You won ${myDelta > 0 ? `+${myDelta}` : myDelta}`);
+    borderColor = C.success;
+    header = h(Text, { color: C.success, bold: true }, `🏆 You won  ${fmtDelta(myDelta)} chips`);
   } else if (winnerSocketId === peerSocketId) {
-    header = h(Text, { color: "red" }, `${peerHandle} won (${peerDelta > 0 ? `+${peerDelta}` : peerDelta})`);
+    borderColor = C.danger;
+    header = h(Text, { color: C.danger, bold: true }, `🥈 ${peerHandle || "opponent"} won  ${fmtDelta(peerDelta)} chips`);
   } else {
-    header = h(Text, { color: "yellow" }, "No winner this round.");
+    borderColor = C.warning;
+    header = h(Text, { color: C.warning, bold: true }, "🤝 No winner this round");
   }
 
-  const body = renderReveal(roundType, reveal, mySocketId, peerSocketId);
+  const body = renderReveal(roundType, reveal, mySocketId, peerSocketId, myHandle, peerHandle);
 
   return h(Box, {
     flexDirection: "column",
-    borderStyle: "round",
-    borderColor: winnerSocketId === mySocketId ? "green" : winnerSocketId === peerSocketId ? "red" : "yellow",
-    paddingX: 1,
+    borderStyle: B.primary,
+    borderColor,
+    paddingX: 2,
+    paddingY: 0,
     marginTop: 1,
   },
     header,
@@ -36,8 +42,16 @@ export function RevealCard({ resolved, mySocketId, peerSocketId, myHandle, peerH
   );
 }
 
-function renderReveal(roundType, reveal, mySocketId, peerSocketId) {
+function fmtDelta(d) {
+  if (d > 0) return `+${d}`;
+  if (d < 0) return String(d);
+  return "±0";
+}
+
+function renderReveal(roundType, reveal, mySocketId, peerSocketId, myHandle, peerHandle) {
   if (!reveal) return null;
+  const me = myHandle || "you";
+  const opp = peerHandle || "opponent";
 
   if (roundType === "indian_poker") {
     const myCard = reveal.cards?.[mySocketId];
@@ -45,17 +59,33 @@ function renderReveal(roundType, reveal, mySocketId, peerSocketId) {
     const myDecision = reveal.decisions?.[mySocketId];
     const peerDecision = reveal.decisions?.[peerSocketId];
     return h(Box, { flexDirection: "column" },
-      h(Text, null, `Cards — yours: ${myCard ?? "?"}, opponent's: ${peerCard ?? "?"}`),
-      h(Text, { dimColor: true }, `Decisions — you: ${myDecision || "—"}, opponent: ${peerDecision || "—"}`),
+      h(Box, null,
+        h(Text, { dimColor: true }, "cards  "),
+        h(Text, { color: C.brand, bold: true }, `${me} ${myCard ?? "?"}`),
+        h(Text, { dimColor: true }, "   ·   "),
+        h(Text, { color: C.peer, bold: true }, `${opp} ${peerCard ?? "?"}`),
+      ),
+      h(Box, null,
+        h(Text, { dimColor: true }, `decisions  ${me} ${myDecision || "—"}   ·   ${opp} ${peerDecision || "—"}`),
+      ),
     );
   }
 
   if (roundType === "estimation" || roundType === "monty_mirage") {
     const mySub = reveal.submissions?.[mySocketId];
     const peerSub = reveal.submissions?.[peerSocketId];
+    const suffix = roundType === "monty_mirage" ? "%" : "";
     return h(Box, { flexDirection: "column" },
-      h(Text, null, `Truth: ${reveal.answer}`),
-      h(Text, null, `You: ${mySub ?? "—"}  ·  Opponent: ${peerSub ?? "—"}`),
+      h(Box, null,
+        h(Text, { dimColor: true }, "truth  "),
+        h(Text, { color: C.warning, bold: true }, `${reveal.answer}${suffix}`),
+      ),
+      h(Box, null,
+        h(Text, { dimColor: true }, "guesses  "),
+        h(Text, { color: C.brand }, `${me} ${mySub ?? "—"}${suffix}`),
+        h(Text, { dimColor: true }, "   ·   "),
+        h(Text, { color: C.peer }, `${opp} ${peerSub ?? "—"}${suffix}`),
+      ),
       reveal.explanation ? h(Text, { dimColor: true }, reveal.explanation) : null,
     );
   }
@@ -64,8 +94,13 @@ function renderReveal(roundType, reveal, mySocketId, peerSocketId) {
     const myPick = reveal.picks?.[mySocketId];
     const peerPick = reveal.picks?.[peerSocketId];
     return h(Box, { flexDirection: "column" },
-      h(Text, null, `Picks — you: ${myPick ?? "—"}, opponent: ${peerPick ?? "—"}`),
-      reveal.bust ? h(Text, { color: "red" }, "Both bust (≥8 each).") : null,
+      h(Box, null,
+        h(Text, { dimColor: true }, "picks  "),
+        h(Text, { color: C.brand, bold: true }, `${me} ${myPick ?? "—"}`),
+        h(Text, { dimColor: true }, "   ·   "),
+        h(Text, { color: C.peer, bold: true }, `${opp} ${peerPick ?? "—"}`),
+      ),
+      reveal.bust ? h(Text, { color: C.danger }, "Both bust (≥8 each)") : null,
     );
   }
 
@@ -73,8 +108,16 @@ function renderReveal(roundType, reveal, mySocketId, peerSocketId) {
     const mLock = reveal.locks?.[mySocketId];
     const pLock = reveal.locks?.[peerSocketId];
     return h(Box, { flexDirection: "column" },
-      h(Text, null, `Answer: ${reveal.answer}`),
-      h(Text, null, `Your lock: ${mLock ?? "—"}  ·  Opponent: ${pLock ?? "—"}`),
+      h(Box, null,
+        h(Text, { dimColor: true }, "answer  "),
+        h(Text, { color: C.warning, bold: true }, String(reveal.answer)),
+      ),
+      h(Box, null,
+        h(Text, { dimColor: true }, "locks  "),
+        h(Text, { color: C.brand }, `${me} ${mLock ?? "—"}`),
+        h(Text, { dimColor: true }, "   ·   "),
+        h(Text, { color: C.peer }, `${opp} ${pLock ?? "—"}`),
+      ),
       reveal.explanation ? h(Text, { dimColor: true }, reveal.explanation) : null,
     );
   }
@@ -83,18 +126,24 @@ function renderReveal(roundType, reveal, mySocketId, peerSocketId) {
     const mySub = reveal.submissions?.[mySocketId];
     const peerSub = reveal.submissions?.[peerSocketId];
     const fmtSub = (s) => s ? `${s.direction === "up" ? "↑" : "↓"} ${s.magnitude}%` : "—";
-    // Concatenate visible + hidden prices into the full 60-bar line.
-    // visiblePrices isn't on the reveal payload — only hiddenPrices is.
-    // The full line still works with just hidden prices (the "next 30 min").
     const fullLine = sparkline(reveal.hiddenPrices || []);
     return h(Box, { flexDirection: "column" },
-      fullLine
-        ? h(Text, { color: "yellow" }, `Next 30 min: ${fullLine}`)
-        : null,
-      h(Text, null,
-        `Truth: ${reveal.answerDirection === "up" ? "↑" : "↓"} ${reveal.answerMagnitude}%`,
+      fullLine ? h(Box, null,
+        h(Text, { dimColor: true }, "next 30 min  "),
+        h(Text, { color: C.warning }, fullLine),
+      ) : null,
+      h(Box, null,
+        h(Text, { dimColor: true }, "truth  "),
+        h(Text, { color: C.warning, bold: true },
+          `${reveal.answerDirection === "up" ? "↑" : "↓"} ${reveal.answerMagnitude}%`,
+        ),
       ),
-      h(Text, null, `You: ${fmtSub(mySub)}  ·  Opponent: ${fmtSub(peerSub)}`),
+      h(Box, null,
+        h(Text, { dimColor: true }, "guesses  "),
+        h(Text, { color: C.brand }, `${me} ${fmtSub(mySub)}`),
+        h(Text, { dimColor: true }, "   ·   "),
+        h(Text, { color: C.peer }, `${opp} ${fmtSub(peerSub)}`),
+      ),
       reveal.explanation ? h(Text, { dimColor: true }, reveal.explanation) : null,
     );
   }

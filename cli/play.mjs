@@ -33,6 +33,7 @@ import { BigORound } from "./components/rounds/BigO.mjs";
 import { GeoTriviaRound } from "./components/rounds/GeoTrivia.mjs";
 import { StockDirectionRound } from "./components/rounds/StockDirection.mjs";
 import { CollapsedStrip } from "./components/CollapsedStrip.mjs";
+import { C, B, BRAND, Banner, Footer, Hint, Key, PhasePill } from "./lib/theme.mjs";
 
 // CLI flags. --dock switches the App into dock-mode rendering
 // (height-conditional: CollapsedStrip when the pane is small, full UI
@@ -501,15 +502,7 @@ function App() {
   // auto-scroll to keep the bottom in view, which reads as the screen
   // jumping on every new question.
   return h(Box, { flexDirection: "column", padding: 1, height: rows, overflow: "hidden" },
-    h(Box, {
-      borderStyle: "round",
-      borderColor: "cyan",
-      paddingX: 2,
-      paddingY: 0,
-      alignSelf: "flex-start",
-    },
-      h(Text, { bold: true, color: "cyan" }, "☕ Waiting Lounge"),
-    ),
+    h(Banner, null),
 
     h(Box, { marginTop: 1, flexDirection: "column" },
       renderScene(state),
@@ -517,113 +510,137 @@ function App() {
 
     state.reconnecting ? h(Box, {
       marginTop: 1,
-      borderStyle: "round",
-      borderColor: "yellow",
+      borderStyle: B.primary,
+      borderColor: C.warning,
       paddingX: 1,
     },
-      h(Text, { color: "yellow", bold: true }, "⟳ Reconnecting…"),
-      h(Text, { dimColor: true }, "  Server has 10s grace; we'll re-sync the round automatically."),
+      h(Text, { color: C.warning, bold: true }, "⟳ Reconnecting…"),
+      h(Text, { dimColor: true }, "  We'll re-sync within 10 seconds. You can keep watching."),
     ) : null,
 
     state.confirmDialog === "forfeit" ? h(Box, {
       marginTop: 1,
-      borderStyle: "double",
-      borderColor: "red",
+      borderStyle: B.strong,
+      borderColor: C.danger,
       paddingX: 2,
       paddingY: 0,
       flexDirection: "column",
     },
-      h(Text, { color: "red", bold: true }, "Forfeit match?"),
-      h(Text, null, "Press Y to forfeit (you'll lose this match), N to keep playing."),
-      h(Text, { dimColor: true }, "  [Y] forfeit    [N] cancel"),
+      h(Text, { color: C.danger, bold: true }, "Forfeit this match?"),
+      h(Text, null, "You'll lose the antes already in the pot."),
+      h(Box, { marginTop: 1 },
+        h(Hint, { items: [
+          ["Y", " forfeit"],
+          ["N", " keep playing"],
+        ] }),
+      ),
     ) : null,
 
     state.toast ? h(Box, { marginTop: 1 },
-      h(Text, { color: "yellow" }, state.toast),
+      h(Text, { color: C.warning }, state.toast),
     ) : null,
 
-    h(Box, { marginTop: 1 },
-      h(Text, { dimColor: true }, hint(state)),
-    ),
+    renderFooter(state),
   );
 }
 
-function hint(state) {
-  if (state.confirmDialog) return "[Y] confirm  [N] cancel";
-  if (state.reconnecting) return "Reconnecting…  (Q to give up)";
-  if (state.chatMode) return "Typing in chat. Enter = send · ESC = exit chat mode.";
+// renderFooter — every scene gets a one-line dimmed footer listing
+// the keys that work right now. Format: `[K] verb · [K] verb …`.
+// Keep items short — verbs only, no full sentences.
+function renderFooter(state) {
+  if (state.confirmDialog) {
+    return h(Footer, { items: [["Y", " confirm"], ["N", " cancel"]] });
+  }
+  if (state.reconnecting) {
+    return h(Footer, { items: ["reconnecting…", ["Q", " give up"]] });
+  }
+  if (state.chatMode) {
+    return h(Footer, { items: ["typing in chat", ["Enter", " send"], ["Esc", " exit chat"]] });
+  }
+  const items = footerItems(state);
+  return h(Footer, { items });
+}
+
+function footerItems(state) {
   switch (state.appPhase) {
-    case "lobby": return "[F] find a match  [B] bot now  [Q] quit";
-    case "searching": return "Press X to cancel queue. Q to quit.";
+    case "auth":
+    case "pairing":
+    case "connecting":
+      return [["Q", " quit"]];
+    case "lobby":
+      return [["F", " find match"], ["B", " bot now"], ["Q", " quit"]];
+    case "searching":
+      return [["X", " cancel"], ["Q", " quit"]];
     case "in_match": {
-      const chatPart = " · T to chat";
-      if (state.round?.phase === "bet" && !state.myBet) return "Pick a bet: C/1/2/3/A/F." + chatPart + " · Q to quit.";
-      if (state.round?.phase === "answer" && !state.myAnswer) return answerHint(state) + chatPart;
-      return "Q to quit (forfeits)." + chatPart;
+      const tail = [["T", " chat"], ["Q", " forfeit"]];
+      if (state.round?.phase === "bet" && !state.myBet) {
+        return [
+          ["C", " check"], ["1/2/3", " raise"], ["A", " all-in"], ["F", " fold"],
+          ...tail,
+        ];
+      }
+      if (state.round?.phase === "answer" && !state.myAnswer) {
+        return [...answerFooterItems(state), ...tail];
+      }
+      return ["waiting for opponent…", ...tail];
     }
-    case "match_end": return "Press any key to return to lobby. Q to quit.";
-    case "error": return "Press Q to quit.";
-    default: return "Press Q to quit.";
+    case "match_end":
+      return [["any key", " play again"], ["Q", " quit"]];
+    case "error":
+      return [["Q", " quit"]];
+    default:
+      return [["Q", " quit"]];
   }
 }
 
-function answerHint(state) {
+function answerFooterItems(state) {
   const t = state.round?.type;
-  if (t === "indian_poker") return "B = bet, F = fold. Q to quit.";
-  if (t === "chicken") return "Pick 1–9 or 0 (=10). Q to quit.";
-  if (t === "big_o" || t === "geo_trivia") return "Press 1–N to pick a choice. Q to quit.";
-  if (t === "estimation" || t === "monty_mirage") return "Type a number, Enter to submit. Backspace to edit. Q to quit.";
+  if (t === "indian_poker") return [["B", " bet"], ["F", " fold"]];
+  if (t === "chicken") return [["1–9", " pick"], ["0", " pick 10"]];
+  if (t === "big_o" || t === "geo_trivia") return [["1–N", " pick a choice"]];
+  if (t === "estimation" || t === "monty_mirage") {
+    return [["digits", " type"], ["Enter", " submit"], ["Backspace", " edit"]];
+  }
   if (t === "stock_direction") {
     return state.stockDir == null
-      ? "U = up, D = down. Q to quit."
-      : "Type magnitude % then Enter. Backspace to change direction. Q to quit.";
+      ? [["U", " up"], ["D", " down"]]
+      : [["digits", " magnitude"], ["Enter", " submit"], ["Backspace", " change direction"]];
   }
-  return "Q to quit (forfeits).";
+  return [];
 }
 
 function renderScene(state) {
   switch (state.appPhase) {
     case "auth":
-      return h(Text, { color: "yellow" }, "Reading saved credentials…");
+      return h(Box, { flexDirection: "column" },
+        h(Text, { color: C.warning }, "Reading saved credentials…"),
+        h(Text, { dimColor: true }, "If this is your first run, the browser will open in a moment."),
+      );
     case "pairing":
       return h(Box, { flexDirection: "column" },
-        h(Text, { bold: true, color: "cyan" }, "Authorize this terminal in your browser."),
-        h(Text, null, " "),
-        h(Text, null, "We opened this URL for you (or copy/paste it):"),
-        h(Text, { color: "blue" }, `  ${state.pairUrl}`),
-        h(Text, null, " "),
-        h(Text, { dimColor: true }, `Confirm the code shown there ends with: ${state.codeTail}`),
-        h(Text, null, " "),
-        h(Text, { color: "yellow" }, "Waiting for you to click Authorize…"),
+        h(Text, { bold: true, color: C.brand }, "Authorize this terminal"),
+        h(Box, { marginTop: 1, flexDirection: "column" },
+          h(Text, null, "We opened this URL in your browser:"),
+          h(Text, { color: C.link }, `  ${state.pairUrl}`),
+          h(Text, { dimColor: true }, "Didn't open? Copy that URL into any browser."),
+        ),
+        h(Box, { marginTop: 1, flexDirection: "column" },
+          h(Text, null,
+            "Verify the code there ends with: ",
+            h(Text, { color: C.warning, bold: true }, state.codeTail),
+          ),
+          h(Text, { color: C.warning }, "Waiting for you to click Authorize…"),
+        ),
       );
     case "connecting":
       return h(Box, { flexDirection: "column" },
-        h(Text, { color: "yellow" }, "Connecting to the lounge…"),
+        h(Text, { color: C.warning }, "Connecting to the lounge…"),
         state.email ? h(Text, { dimColor: true }, `as ${state.email}`) : null,
       );
     case "lobby":
-      return h(Box, { flexDirection: "column" },
-        h(Text, { color: "green" },
-          state.myHandle && state.email ? `Authenticated as ${state.email} · handle ${state.myHandle}` :
-          state.email ? `Authenticated as ${state.email}` :
-          "Connected.",
-        ),
-        h(Box, { marginTop: 1 },
-          h(Text, { color: "cyan", bold: true }, "[F] Find a match"),
-          h(Text, null, "    "),
-          h(Text, { dimColor: true }, "Brain Bet · 5 min · 100-pt ante · 30s bot fallback"),
-        ),
-        h(Box, null,
-          h(Text, { color: "magenta", bold: true }, "[B] Play a bot now"),
-          h(Text, null, "  "),
-          h(Text, { dimColor: true }, "Skip the wait — instant bot match for practice."),
-        ),
-      );
+      return renderLobby(state);
     case "searching":
-      return h(Box, { flexDirection: "column" },
-        h(Text, { color: "yellow" }, "Searching the pool…"),
-        state.poolWaiting ? renderSearchTimer(state.poolWaiting) : null,
-      );
+      return renderSearching(state);
     case "in_match":
       return renderInMatch(state);
     case "match_end":
@@ -635,27 +652,87 @@ function renderScene(state) {
       });
     case "error":
       return h(Box, { flexDirection: "column" },
-        h(Text, { color: "red" }, `Error: ${state.error}`),
-        h(Text, { dimColor: true }, "Press Q to quit, then re-run `waiting-lounge play`."),
+        h(Box, {
+          borderStyle: B.strong,
+          borderColor: C.danger,
+          paddingX: 2,
+          paddingY: 0,
+          flexDirection: "column",
+        },
+          h(Text, { color: C.danger, bold: true }, "Something went wrong"),
+          h(Text, null, state.error || "Unknown error."),
+        ),
+        h(Text, { dimColor: true, marginTop: 1 }, "Re-run ", h(Text, { color: C.brand }, "waiting-lounge play"), " to retry."),
       );
     default:
       return h(Text, null, state.appPhase);
   }
 }
 
-function renderSearchTimer({ startedAt }) {
-  const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+function renderLobby(state) {
+  const greeting =
+    state.myHandle && state.email ? `${state.email}  ·  handle ` :
+    state.email ? `${state.email}` :
+    "Connected.";
+  return h(Box, { flexDirection: "column" },
+    // Identity row.
+    h(Box, null,
+      h(Text, { color: C.success }, "● "),
+      h(Text, null, greeting),
+      state.myHandle ? h(Text, { color: C.brand, bold: true }, state.myHandle) : null,
+    ),
+
+    // Primary CTA — find a real opponent.
+    h(Box, { marginTop: 1, flexDirection: "column" },
+      h(Box, null,
+        h(Key, { label: "F" }),
+        h(Text, { color: C.brand, bold: true }, " Find a match"),
+      ),
+      h(Text, { dimColor: true }, "  Brain Bet  ·  5 min  ·  100-pt ante  ·  bot fills after 30s if nobody pairs"),
+    ),
+
+    // Secondary CTA — instant bot.
+    h(Box, { marginTop: 1, flexDirection: "column" },
+      h(Box, null,
+        h(Key, { label: "B", color: C.peer }),
+        h(Text, { color: C.peer, bold: true }, " Play a bot now"),
+      ),
+      h(Text, { dimColor: true }, "  Skip the wait — instant practice match. No points change hands."),
+    ),
+  );
+}
+
+function renderSearching(state) {
+  const startedAt = state.poolWaiting?.startedAt;
+  const elapsedSec = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
   const botFillIn = Math.max(0, 30 - elapsedSec);
-  return h(Box, { flexDirection: "column", marginTop: 1 },
-    h(Text, { dimColor: true }, `${elapsedSec}s elapsed`),
-    h(Text, { dimColor: true }, botFillIn > 0 ? `Bot fills in ~${botFillIn}s if no human pairs.` : "Bot should be joining any moment…"),
+  const botColor = botFillIn > 5 ? C.warning : C.brand;
+  return h(Box, { flexDirection: "column" },
+    h(Box, null,
+      h(Text, { color: C.warning, bold: true }, "⌛ Searching the pool"),
+      h(Text, { dimColor: true }, `  ${elapsedSec}s elapsed`),
+    ),
+    h(Box, { marginTop: 1 },
+      h(Text, { dimColor: true }, "  Looking for the next idle player…"),
+    ),
+    h(Box, null,
+      h(Text, { color: botColor }, "  🤖 "),
+      h(Text, { dimColor: true },
+        botFillIn > 0
+          ? `Bot fills in ~${botFillIn}s if no human pairs.`
+          : "Bot is joining any moment now…",
+      ),
+    ),
   );
 }
 
 function renderInMatch(state) {
   const { round, match, mySocketId, myHandle, myBet, myAnswer, numericInput, stockDir, resolved, betSecondsLeft } = state;
   if (!round || !match) {
-    return h(Text, null, "Waiting for round…");
+    return h(Box, { flexDirection: "column" },
+      h(Text, { color: C.warning }, "Match starting…"),
+      h(Text, { dimColor: true }, "Loading round 1."),
+    );
   }
   const peerSocketId = match.peerSocketId;
   const myChips = round.chipStacks?.[mySocketId] ?? 0;
@@ -681,6 +758,25 @@ function renderInMatch(state) {
     round.type === "stock_direction" ? h(StockDirectionRound, roundProps) :
     h(PlaceholderRound, { roundType: round.type, payload: round.payload, phase: round.phase });
 
+  // Phase pill: "Round 3/5 · bet phase · 8s left  ·  bot match" — one
+  // dimmed status row directly under the chip bar.
+  const phaseLabel =
+    round.phase === "bet" ? "bet phase" :
+    round.phase === "answer" ? "answer phase" :
+    round.phase === "reveal" ? "reveal" :
+    round.phase || "";
+  const phaseParts = [`Round ${round.round}/${round.total}`];
+  if (phaseLabel) phaseParts.push(phaseLabel);
+  if (round.phase === "bet" && betSecondsLeft != null) {
+    const urgent = betSecondsLeft <= 3;
+    phaseParts.push({
+      text: `${betSecondsLeft}s left`,
+      color: urgent ? C.danger : C.warning,
+      bold: urgent,
+    });
+  }
+  if (isBotMatch) phaseParts.push("bot match — no points change hands");
+
   return h(Box, { flexDirection: "column" },
     h(ChipBar, {
       myHandle: myHandle || "you",
@@ -690,10 +786,7 @@ function renderInMatch(state) {
       pot: round.pot,
     }),
     h(Box, { marginTop: 1 },
-      h(Text, { dimColor: true },
-        `Round ${round.round} of ${round.total}`,
-        isBotMatch ? "  ·  bot match (no points change hands)" : "",
-      ),
+      h(PhasePill, { parts: phaseParts }),
     ),
 
     roundComponent,

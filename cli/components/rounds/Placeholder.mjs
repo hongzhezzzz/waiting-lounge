@@ -1,28 +1,21 @@
-// Placeholder for round types that don't yet have a TUI renderer
-// (Phase 4d). Shows the round type name + payload-dependent prompt
-// so the user has SOMETHING to look at, but they can't input an
-// answer in 4c — the bet phase still works.
+// Placeholder for round types that don't yet have a TUI renderer.
+// Shows the round-type name + payload-dependent prompt so the user
+// has SOMETHING to look at, but they can't input an answer in this
+// fallback path — the bet phase still works.
 
 import { Box, Text } from "ink";
 import { createElement as h } from "react";
-
-const TITLES = {
-  estimation: "Estimation",
-  monty_mirage: "Monty Mirage",
-  chicken: "Chicken Numbers",
-  big_o: "Big-O Showdown",
-  geo_trivia: "Geo Trivia",
-  stock_direction: "Stock Direction",
-};
+import { C, B, ROUND_META } from "../../lib/theme.mjs";
 
 export function PlaceholderRound({ roundType, payload, phase }) {
+  const meta = ROUND_META[roundType] || { icon: "?", title: roundType };
   const prompt = pickPrompt(roundType, payload);
 
   return h(Box, { flexDirection: "column", marginTop: 1 },
-    h(Text, { color: "cyan", bold: true }, TITLES[roundType] || roundType),
+    h(Text, { color: C.brand, bold: true }, `${meta.icon} ${meta.title}`),
     prompt ? h(Box, {
       marginTop: 1,
-      borderStyle: "single",
+      borderStyle: B.panel,
       borderColor: "gray",
       paddingX: 1,
       paddingY: 0,
@@ -30,12 +23,12 @@ export function PlaceholderRound({ roundType, payload, phase }) {
       h(Text, null, prompt),
     ) : null,
     h(Box, { marginTop: 1 },
-      h(Text, { color: "yellow" },
+      h(Text, { color: C.warning },
         phase === "answer"
-          ? "Answer-phase input lands in Phase 4d. This round will time out for you."
+          ? "Answer-phase input not yet wired for this round type. The round will time out for you."
           : phase === "bet"
-          ? "Bet phase open — pick a tier above."
-          : "Reveal phase — bet phase opens shortly.",
+          ? "Bet phase open above — pick a tier."
+          : "Reveal in progress — bet phase opens shortly.",
       ),
     ),
   );
