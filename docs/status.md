@@ -88,6 +88,9 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 9b (headless detection)
+- **`isHeadless()` gate on auto-open.** When the install command runs on a machine with no graphical display reachable, the auto-open call is skipped and a clear message replaces it ("No graphical display detected — copy the link above into a browser on your local machine"). Headless = native Linux without `$DISPLAY` AND without `$WAYLAND_DISPLAY` AND not WSL AND `$BROWSER` not set. macOS / native Windows / WSL / `$BROWSER`-set environments are never treated as headless. Suppresses the confusing `xdg-open: no method available` stderr line that SSH / Docker / CI users would otherwise see.
+
 ### Stage 9 (frictionless one-line install)
 - **`waiting-lounge install` auto-merges settings.json** by default (was opt-in before). Default mode writes the 4 hook entries (`UserPromptSubmit`/`Notification`/`PostToolUse`/`Stop`) into `~/.claude/settings.json`, preserving any unrelated top-level keys and existing hook entries from other tools. Re-running `install` is idempotent — our entries are replaced cleanly, not duplicated.
 - **Timestamped backup** at `~/.claude/settings.json.bak.<ISO>` before any edit. Rollback is one `cp` away.

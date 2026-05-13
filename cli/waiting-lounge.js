@@ -312,16 +312,45 @@ function getJson(urlString, timeoutMs = 3000) {
   });
 }
 
+// True when the machine has no graphical display reachable. We use this to
+// suppress auto-opening the browser on SSH / Docker / CI / headless servers,
+// where xdg-open either no-ops or emits a confusing "no method available"
+// stderr line. The URL is always printed too, so the user copy-pastes it
+// into their LOCAL browser.
+//
+// Rules:
+//   - macOS, native Windows: never headless (always has a desktop session).
+//   - WSL: never headless (we route through cmd.exe → Windows host browser).
+//   - $BROWSER set: never headless (user explicitly wants browser opens).
+//   - Linux native: headless when both $DISPLAY (X11) and $WAYLAND_DISPLAY
+//     are unset. SSH with X-forwarding sets $DISPLAY automatically, so it
+//     is correctly treated as non-headless.
+function isHeadless() {
+  const platform = process.platform;
+  if (platform === "darwin" || platform === "win32") return false;
+  const isWSL = Boolean(
+    process.env.WSL_DISTRO_NAME ||
+      process.env.WSLENV ||
+      (process.env.WSL_INTEROP && process.env.WSL_INTEROP.length > 0),
+  );
+  if (isWSL) return false;
+  if (process.env.BROWSER) return false;
+  return !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+}
+
 // Try to open a URL in the user's default browser. Never throws — the URL
 // is always printed too, so if this no-ops the user can still click the
-// printed link. Returns {tried, command} for the caller to report.
+// printed link. Returns { tried, command, reason } so the caller can vary
+// the printed message: when reason === "headless", we explain that we
+// skipped on purpose; otherwise we say we tried.
 function openBrowser(url) {
+  if (isHeadless()) {
+    return { tried: false, command: null, reason: "headless" };
+  }
   const platform = process.platform;
   let cmd = null;
   let args = [];
   try {
-    // WSL: the browser lives on the Windows host, not the Linux VM. xdg-open
-    // either no-ops or pops a "command not found" picker. Prefer cmd.exe.
     const isWSL = Boolean(
       process.env.WSL_DISTRO_NAME ||
         process.env.WSLENV ||
@@ -336,22 +365,19 @@ function openBrowser(url) {
     } else if (isWSL) {
       cmd = "cmd.exe";
       args = ["/c", "start", "", url];
+    } else if (process.env.BROWSER) {
+      cmd = process.env.BROWSER;
+      args = [url];
     } else {
-      // Linux: xdg-open. If $BROWSER is set, prefer that.
-      if (process.env.BROWSER) {
-        cmd = process.env.BROWSER;
-        args = [url];
-      } else {
-        cmd = "xdg-open";
-        args = [url];
-      }
+      cmd = "xdg-open";
+      args = [url];
     }
     const child = spawn(cmd, args, { stdio: "ignore", detached: true });
     child.on("error", () => {}); // swallow ENOENT — URL is printed anyway
     child.unref();
-    return { tried: true, command: cmd };
+    return { tried: true, command: cmd, reason: null };
   } catch {
-    return { tried: false, command: null };
+    return { tried: false, command: null, reason: "spawn-failed" };
   }
 }
 
@@ -428,10 +454,14 @@ async function cmdInstall(args) {
   console.log("");
 
   if (openPair) {
-    const { tried, command } = openBrowser(pairUrl);
+    const { tried, command, reason } = openBrowser(pairUrl);
     if (tried) {
       console.log(`   Opening this URL in your browser (via \`${command}\`)…`);
       console.log("   If nothing opens, copy the link above into any browser.");
+      console.log("");
+    } else if (reason === "headless") {
+      console.log("   No graphical display detected (SSH / container / headless).");
+      console.log("   Copy the link above into a browser on your local machine.");
       console.log("");
     }
   }
@@ -618,6 +648,7 @@ function cmdHelp() {
   console.log("   waiting-lounge install         default: auto-wire settings.json (with backup) + open browser");
   console.log("   waiting-lounge install --ask         prompt before touching settings.json");
   console.log("   waiting-lounge install --no-open     skip auto-opening the pair URL");
+  console.log("                                        (also skipped automatically on headless boxes)");
   console.log("   waiting-lounge install --print-only  print JSON only, never touch settings.json");
   console.log("   waiting-lounge uninstall       remove ~/.waiting-lounge/   (--force to skip prompt)");
   console.log("   waiting-lounge --version       print package version");
