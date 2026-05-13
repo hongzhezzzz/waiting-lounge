@@ -88,6 +88,12 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 10e (attach Mac-friendly bindings)
+- **Bug:** `waiting-lounge attach` documented `Ctrl-B + ↑/↓` for pane switch and `Ctrl-B + Ctrl-↑/↓` for resize. On macOS, Mission Control intercepts `Ctrl + arrow` at the OS level before tmux can see them, so the bindings effectively don't work.
+- **Fix:** `attach.js` now captures the lounge + claude pane IDs at attach time and binds `Ctrl-L` (no prefix needed) in tmux's `root` keytable. First press expands the lounge to ~30% and focuses it; second press collapses back to 1 row and focuses claude. Same pattern as `dock`. The pane IDs are baked into the binding so the toggle works regardless of intervening tmux activity. Toggle handler wraps all `tmux` calls in try/catch per the Stage 10a lesson.
+- **Help text rewritten** — printed instructions now advertise `Ctrl-L` and include the cleanup command (`tmux unbind -T root C-l`) since the binding persists for the tmux server's lifetime.
+- **Env vars:** `WL_DOCK_TOGGLE_KEY` (default `C-l`) and `WL_DOCK_EXPANDED_PCT` (default 30) reuse the same dock conventions so a user who tunes one tunes both.
+
 ### Stage 10d (symmetric uninstall + install/uninstall doc)
 - **`waiting-lounge uninstall --force` now mirrors install.** Removes `~/.waiting-lounge/` AND scrubs the waiting-lounge hook entries from `~/.claude/settings.json` (timestamped backup written first). Other tools' hooks and top-level keys preserved. `--keep-settings` opts out of the settings cleanup. New `unmergeWaitingLoungeHooks()` helper is the precise inverse of the install-time merge.
 - **`docs/install.md`** (new) — one-screen install/uninstall reference; covers the install one-liner, all `--flag` opt-outs, the `[B]rowser / [T]erminal` sign-in choice, diagnostics commands, uninstall behavior, and the clean-slate reinstall recipe. README links it.
