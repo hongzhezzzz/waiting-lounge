@@ -88,6 +88,10 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 10d (symmetric uninstall + install/uninstall doc)
+- **`waiting-lounge uninstall --force` now mirrors install.** Removes `~/.waiting-lounge/` AND scrubs the waiting-lounge hook entries from `~/.claude/settings.json` (timestamped backup written first). Other tools' hooks and top-level keys preserved. `--keep-settings` opts out of the settings cleanup. New `unmergeWaitingLoungeHooks()` helper is the precise inverse of the install-time merge.
+- **`docs/install.md`** (new) — one-screen install/uninstall reference; covers the install one-liner, all `--flag` opt-outs, the `[B]rowser / [T]erminal` sign-in choice, diagnostics commands, uninstall behavior, and the clean-slate reinstall recipe. README links it.
+
 ### Stage 10c (terminal-side OTP)
 - **`[B]rowser / [T]erminal` choice when auth is needed.** When the user picks `[F] find a match` while unauthenticated, the lounge now shows a choice surface instead of jumping straight to the browser pair. `[B]` runs the existing browser flow; `[T]` runs an in-terminal email + 6-digit OTP flow that never leaves the TUI.
 - **Headless auto-pick.** On native Linux without `$DISPLAY`/`$WAYLAND_DISPLAY` (SSH, Docker, CI), the choice is skipped and the user lands directly in the email entry — browser pair is impossible there anyway.

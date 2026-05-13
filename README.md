@@ -102,6 +102,7 @@ See [`docs/statusline-setup.md`](docs/statusline-setup.md) — paste one block i
 
 ## Documentation
 
+- [`docs/install.md`](docs/install.md) — one-screen install + uninstall reference
 - [`docs/status.md`](docs/status.md) — the truth about what works right now (per-feature, dated)
 - [`docs/decisions.md`](docs/decisions.md) — append-only log of non-obvious design choices
 - [`docs/statusline-setup.md`](docs/statusline-setup.md) — Claude Code statusline integration

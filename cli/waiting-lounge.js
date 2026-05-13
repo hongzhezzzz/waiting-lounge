@@ -136,6 +136,52 @@ function mergeWaitingLoungeHooks(settings, hookPath) {
   return { settings, added, replaced };
 }
 
+// Inverse of mergeWaitingLoungeHooks (Stage 10d). Removes every inner
+// hook entry that points at hookPath, drops now-empty wrapping blocks,
+// and drops the entire event entry when no other tool was using it.
+// Returns { settings, removed } — caller writes back.
+function unmergeWaitingLoungeHooks(settings, hookPath) {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    return { settings: settings || {}, removed: 0 };
+  }
+  if (!settings.hooks || typeof settings.hooks !== "object" || Array.isArray(settings.hooks)) {
+    return { settings, removed: 0 };
+  }
+  let removed = 0;
+  for (const event of Object.keys(settings.hooks)) {
+    const blocks = settings.hooks[event];
+    if (!Array.isArray(blocks)) continue;
+    const cleanedBlocks = [];
+    for (const block of blocks) {
+      if (!block || typeof block !== "object" || !Array.isArray(block.hooks)) {
+        cleanedBlocks.push(block);
+        continue;
+      }
+      const innerCleaned = block.hooks.filter((hk) => {
+        if (!hk || typeof hk !== "object" || typeof hk.command !== "string") return true;
+        const refersToOurs = hk.command.includes(hookPath);
+        if (refersToOurs) removed++;
+        return !refersToOurs;
+      });
+      if (innerCleaned.length > 0) {
+        cleanedBlocks.push({ ...block, hooks: innerCleaned });
+      }
+    }
+    if (cleanedBlocks.length > 0) {
+      settings.hooks[event] = cleanedBlocks;
+    } else {
+      // Entire event had only our entries — drop it.
+      delete settings.hooks[event];
+    }
+  }
+  // If hooks is now empty, drop the empty container too so re-installing
+  // produces a tidy diff next time.
+  if (Object.keys(settings.hooks).length === 0) {
+    delete settings.hooks;
+  }
+  return { settings, removed };
+}
+
 function backupSettings(settingsPath) {
   if (!fs.existsSync(settingsPath)) return null;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -697,30 +743,82 @@ async function cmdTest() {
 
 function cmdUninstall(args) {
   const force = args.includes("--force") || args.includes("-f");
-  if (!fs.existsSync(CONFIG_DIR)) {
-    console.log("Nothing to uninstall — ~/.waiting-lounge/ is already gone.");
-    return;
-  }
-  if (!force) {
-    console.log("");
-    console.log(`This will delete ${CONFIG_DIR} (hook script, device id, backend URL).`);
-    console.log("Re-run with --force to confirm:");
-    console.log("");
-    console.log("  waiting-lounge uninstall --force");
-    console.log("");
-    console.log("After uninstalling, also remove the waiting-lounge entries from");
-    console.log(`${path.join(HOME, ".claude", "settings.json")} — anything where the command path`);
-    console.log(`mentions ${HOOK_PATH}.`);
+  const keepSettings = args.includes("--keep-settings");
+  const dirExists = fs.existsSync(CONFIG_DIR);
+  const settingsPath = path.join(HOME, ".claude", "settings.json");
+  const settingsExists = fs.existsSync(settingsPath);
+
+  if (!dirExists && !settingsExists) {
+    console.log("Nothing to uninstall — ~/.waiting-lounge/ is already gone and no settings.json found.");
     return;
   }
 
-  fs.rmSync(CONFIG_DIR, { recursive: true, force: true });
+  if (!force) {
+    console.log("");
+    console.log("☕ Waiting Lounge — uninstall");
+    console.log("");
+    console.log("This will:");
+    if (dirExists) {
+      console.log(`   ·  delete ${CONFIG_DIR} (hook script, device id, backend URL, auth token)`);
+    }
+    if (settingsExists && !keepSettings) {
+      console.log(`   ·  remove waiting-lounge hook entries from ${settingsPath}`);
+      console.log("      (a timestamped backup is written first; other tools' hooks are preserved)");
+    } else if (keepSettings) {
+      console.log(`   ·  leave ${settingsPath} alone (--keep-settings)`);
+    }
+    console.log("");
+    console.log("Re-run with --force to confirm:");
+    console.log("");
+    console.log("   waiting-lounge uninstall --force");
+    console.log("   waiting-lounge uninstall --force --keep-settings   (don't touch settings.json)");
+    console.log("");
+    console.log("Note: the binary itself (`waiting-lounge`) is removed by `npm uninstall -g waiting-lounge`.");
+    console.log("");
+    return;
+  }
+
+  // 1. Remove ~/.waiting-lounge/
+  if (dirExists) {
+    fs.rmSync(CONFIG_DIR, { recursive: true, force: true });
+    console.log("");
+    console.log(`✓ Removed ${CONFIG_DIR}.`);
+  } else {
+    console.log("");
+    console.log(`· ${CONFIG_DIR} was already gone.`);
+  }
+
+  // 2. Clean settings.json (mirror of install's auto-merge).
+  if (settingsExists && !keepSettings) {
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    } catch (err) {
+      console.log(`⚠ Couldn't parse ${settingsPath}: ${err.message}`);
+      console.log("  Leaving it untouched. Remove waiting-lounge hook entries by hand.");
+      return;
+    }
+    const { settings, removed } = unmergeWaitingLoungeHooks(parsed, HOOK_PATH);
+    if (removed === 0) {
+      console.log(`· No waiting-lounge hook entries found in ${settingsPath}.`);
+    } else {
+      const backupPath = backupSettings(settingsPath);
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
+      console.log(`✓ Removed ${removed} waiting-lounge hook entr${removed === 1 ? "y" : "ies"} from ${settingsPath}.`);
+      if (backupPath) console.log(`  Backup of the previous version: ${backupPath}`);
+    }
+  } else if (keepSettings) {
+    console.log(`· Leaving ${settingsPath} alone (--keep-settings).`);
+  }
+
+  // 3. Tell the user about the binary.
   console.log("");
-  console.log(`Removed ${CONFIG_DIR}.`);
+  console.log("To remove the `waiting-lounge` binary itself, run:");
+  console.log("   npm uninstall -g waiting-lounge");
   console.log("");
-  console.log("One last step — open ~/.claude/settings.json and remove any hooks entries");
-  console.log(`that reference ${HOOK_PATH}. The path won't exist anymore, so leaving them`);
-  console.log("in won't break Claude Code (the hook errors are swallowed) but it'll be noisier.");
+  console.log("Tmux is left installed (other tools may use it). Remove with:");
+  console.log("   macOS:  brew uninstall tmux");
+  console.log("   Linux:  sudo apt remove tmux   (or sudo dnf remove tmux)");
   console.log("");
 }
 
@@ -758,7 +856,8 @@ function cmdHelp() {
   console.log("                                        (also skipped automatically on headless boxes)");
   console.log("   waiting-lounge install --no-install-tmux  skip the optional brew install tmux step");
   console.log("   waiting-lounge install --print-only  print JSON only, never touch settings.json");
-  console.log("   waiting-lounge uninstall       remove ~/.waiting-lounge/   (--force to skip prompt)");
+  console.log("   waiting-lounge uninstall       remove ~/.waiting-lounge/ AND clean settings.json (--force to skip prompt)");
+  console.log("                                  (--keep-settings: leave settings.json alone)");
   console.log("   waiting-lounge --version       print package version");
   console.log("");
   console.log("Privacy promise");
