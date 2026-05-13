@@ -3,7 +3,7 @@
 The truth about what currently works — not what is planned. Updated whenever a phase or feature changes state.
 
 ## Current phase
-**Stage 5.1 complete; Stage 6a (tmux dock beta) shipping.** Chat-while-playing works in both the TUI and the web app. Stage 6a opens Claude Code + the lounge in one tmux window — bottom strip is a 1-row indicator, Ctrl-L expands to ~30%. Auto-scroll regression in `play` is fixed; "Play a bot now" is one keystroke (TUI) / one button (web).
+**Stage 9 (frictionless one-line install) in flight.** `waiting-lounge install` now writes the 4 hook entries into `~/.claude/settings.json` automatically (with a timestamped backup) and auto-opens the pair URL in the user's default browser. Pure one-liner: `npm install -g github:hongzhezzzz/waiting-lounge && waiting-lounge install`. Cautious users can pass `--print-only` (no settings write, no browser open) or `--ask` (prompt before merging). Stage 8 (TUI polish) merged on 2026-05-13.
 
 Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lounge.js {play,dock}` (terminal).
 
@@ -88,6 +88,15 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 9 (frictionless one-line install)
+- **`waiting-lounge install` auto-merges settings.json** by default (was opt-in before). Default mode writes the 4 hook entries (`UserPromptSubmit`/`Notification`/`PostToolUse`/`Stop`) into `~/.claude/settings.json`, preserving any unrelated top-level keys and existing hook entries from other tools. Re-running `install` is idempotent — our entries are replaced cleanly, not duplicated.
+- **Timestamped backup** at `~/.claude/settings.json.bak.<ISO>` before any edit. Rollback is one `cp` away.
+- **Pair URL auto-opens** in the user's default browser via `open` (macOS) / `cmd.exe /c start` (Windows + WSL) / `xdg-open` or `$BROWSER` (Linux). URL is also printed as fallback if auto-open fails.
+- **Opt-outs:** `--print-only` (don't touch settings.json, don't open browser), `--no-open` (skip browser), `--ask` (prompt before merging — for cautious users).
+- **`waiting-lounge pair`** also auto-opens the URL (with `--no-open` to disable). Was print-only before.
+- **Roadmap §9 override** logged in `docs/decisions.md` — the original "never silently edit Claude Code settings" preference is overridden because (a) the privacy invariant is unchanged, (b) the user explicitly asked for one-line install, (c) the backup makes rollback trivial.
+- **One-liner from a fresh machine:** `npm install -g github:hongzhezzzz/waiting-lounge && waiting-lounge install` → click pair URL once → `waiting-lounge dock`. No manual JSON paste.
+
 ### Stage 8 (TUI polish — design system)
 - **`cli/lib/theme.mjs`** (new) — single source of truth for colors, borders, brand identity, round metadata, and shared components. Color tokens (`C.brand`, `C.success`, `C.warning`, `C.danger`, `C.peer`, `C.link`); border tokens (`B.primary`, `B.panel`, `B.strong`); shared components `Banner`, `Footer`, `Hint`, `Key`, `Title`, `PhasePill`. Six design rules at the top of the file.
 - **Every scene gets a one-line dimmed footer** listing exactly the keys that work right now (`[F] find match  ·  [B] bot now  ·  [Q] quit`). Replaces the previous mix of "Press X" prose, "K = action" lists, and bracket-less keys.
@@ -135,4 +144,4 @@ npm link
 This registers the local clone's `waiting-lounge` binary on your PATH (no sudo needed if your npm prefix points at `~/.npm-global` or similar). Without this, you'd type `node cli/waiting-lounge.js <cmd>` instead of `waiting-lounge <cmd>` — both work.
 
 ## Last updated
-2026-05-08 (Stage 7 Distribution shipped — public repo + one-liner install. Stage 8 TUI polish in flight — design system + every scene polished).
+2026-05-13 (Stage 8 TUI polish merged to main. Stage 9 frictionless install in flight — auto-merge settings + auto-open pair URL).
