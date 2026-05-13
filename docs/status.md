@@ -88,6 +88,11 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 9c (cold-start UX + Windows experimental labeling)
+- **Render free-tier cold-start handling.** `waiting-lounge test` and `waiting-lounge status` now do a fast attempt (4–5 s) first; if that times out or returns 502–504/ECONNRESET, they print "Backend may be waking up from sleep (this can take up to 45s)…" and retry once with a generous timeout. Previously, a brand-new user's first `test` would fail with "Couldn't reach the backend (timeout)" if Render had been idle 15+ minutes — looked like a broken install but was just a wake-up.
+- **Silent warmup on install.** `waiting-lounge install` now fires a fire-and-forget `GET /health` to the backend at the very start. By the time the user finishes pasting the pair URL into their browser, the backend is usually warm. Never blocks, never reports errors — pure best-effort polish.
+- **README "Supported platforms" matrix.** WSL2 verified; macOS + Linux native marked expected-OK pending verification; Linux headless functional with notes; **native Windows labeled "experimental — use WSL"** until a real test pass lands. The static review found three native-Windows-only quirks that would need fixing (auth.js openBrowser uses `start ""` without `cmd /c`, multiplexer can't find `claude.cmd`, tmux unavailable). All correctly avoided by routing native-Windows users to WSL.
+
 ### Stage 9b (headless detection)
 - **`isHeadless()` gate on auto-open.** When the install command runs on a machine with no graphical display reachable, the auto-open call is skipped and a clear message replaces it ("No graphical display detected — copy the link above into a browser on your local machine"). Headless = native Linux without `$DISPLAY` AND without `$WAYLAND_DISPLAY` AND not WSL AND `$BROWSER` not set. macOS / native Windows / WSL / `$BROWSER`-set environments are never treated as headless. Suppresses the confusing `xdg-open: no method available` stderr line that SSH / Docker / CI users would otherwise see.
 
