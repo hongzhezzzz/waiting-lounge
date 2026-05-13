@@ -414,6 +414,12 @@ async function cmdInstall(args) {
   const frontendUrl = readFrontendUrl();
   const pairUrl = `${frontendUrl}/pair?d=${deviceId}`;
 
+  // Best-effort backend warmup. Render's free tier sleeps after ~15 min;
+  // firing a /health ping at install start means the backend is usually
+  // warm by the time the user clicks the pair URL and runs `test`. Fire
+  // and forget — never blocks the install, never reports errors.
+  getJson(`${backendUrl}/health`, 30000).catch(() => {});
+
   console.log("");
   console.log("☕ Waiting Lounge installed.");
   console.log("");
@@ -508,8 +514,13 @@ async function cmdStatus() {
   console.log(`   backend        ${backendUrl}`);
   console.log(`   frontend       ${frontendUrl}`);
 
-  // Ping the backend.
-  const health = await getJson(`${backendUrl}/health`, 4000);
+  // Ping the backend. Free-tier cold-start retry: fast attempt first,
+  // then a longer one if the first looked like a wake-up timeout.
+  let health = await getJson(`${backendUrl}/health`, 4000);
+  if (!health.ok && looksLikeColdStart(health)) {
+    console.log(`   backend reach  · waking from sleep (this can take up to 45s)…`);
+    health = await getJson(`${backendUrl}/health`, 45000);
+  }
   if (health.ok) {
     console.log(`   backend reach  ✓   ${health.status} OK`);
   } else {
@@ -533,6 +544,29 @@ async function cmdStatus() {
   console.log("");
 }
 
+// The backend (currently Render free tier) sleeps after ~15 minutes of
+// inactivity. The first request after sleep takes 30–50 seconds for the
+// container to wake. Without handling this, a brand-new user's first
+// `waiting-lounge test` looks like a broken install. We do a fast attempt
+// (5s) for the warm-backend case, then print a clear "warming up" message
+// and retry once with a generous timeout.
+function looksLikeColdStart(result) {
+  if (result.ok) return false;
+  if (result.error === "timeout") return true;
+  if (typeof result.status === "number" && result.status >= 502 && result.status <= 504) return true;
+  // ECONNRESET / ECONNREFUSED also happen during the wake window.
+  if (typeof result.error === "string" && /ECONNRESET|ECONNREFUSED|socket hang up/.test(result.error)) return true;
+  return false;
+}
+
+async function postWithColdStartHandling(url, payload) {
+  const fast = await postJson(url, payload, 5000);
+  if (fast.ok || !looksLikeColdStart(fast)) return fast;
+  console.log("  · Backend may be waking up from sleep (free tier sleeps after ~15 min idle).");
+  console.log("  · Retrying with a longer timeout — this can take up to 45 seconds…");
+  return postJson(url, payload, 45000);
+}
+
 async function cmdTest() {
   if (!fs.existsSync(DEVICE_ID_PATH)) {
     console.error("Not installed yet. Run `waiting-lounge install` first.");
@@ -544,7 +578,7 @@ async function cmdTest() {
 
   console.log("");
   console.log(`Sending a test "waiting" event to ${backendUrl} …`);
-  const result = await postJson(
+  const result = await postWithColdStartHandling(
     `${backendUrl}/api/agent-event`,
     {
       anonymousDeviceId: deviceId,
@@ -552,7 +586,6 @@ async function cmdTest() {
       client: "claude-code",
       timestamp: Date.now(),
     },
-    5000,
   );
 
   if (!result.ok) {
@@ -562,6 +595,8 @@ async function cmdTest() {
     console.log("  - Are you online?");
     console.log(`  - Is the backend URL correct? (${backendUrl})`);
     console.log(`  - Try opening ${backendUrl}/health in your browser.`);
+    console.log("  - If you just installed, wait ~60s and retry — the free-tier backend");
+    console.log("    sometimes takes longer to wake from sleep.");
     process.exit(1);
   }
 

@@ -30,6 +30,18 @@ npm install -g github:hongzhezzzz/waiting-lounge && waiting-lounge install
 
 Requires Node 18+. The `install` command wires the Claude Code hooks into `~/.claude/settings.json` automatically (with a timestamped backup of the previous file) and opens the pair URL in your default browser. One click in the browser and the lounge is live. Pass `--print-only` if you'd rather paste the JSON yourself.
 
+### Supported platforms
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **WSL2 (Linux on Windows)** | ✓ Verified | Primary development environment. Browser auto-open routes through `cmd.exe` to the Windows host. |
+| **macOS** | Expected-OK (verification pending) | Uses `open`, `brew install tmux`. node-pty ships prebuilt darwin-x64 and darwin-arm64 binaries. |
+| **Linux native (desktop)** | Expected-OK | Uses `xdg-open` (or `$BROWSER`). tmux + Node 18+ from your package manager. |
+| **Linux headless (SSH/Docker/CI)** | Functional with notes | Install works; browser auto-open is skipped — copy the pair URL into a browser on your local machine. |
+| **Native Windows (PowerShell/cmd)** | Experimental — use WSL | The zero-dep multiplexer hasn't been tested against ConPTY; tmux is not available natively; `claude` binary path resolution differs. **Recommendation: install WSL and run inside WSL2.** |
+
+If you hit a platform-specific issue, please open an issue — we'd rather hear about a verified-broken case than ship silent regressions.
+
 ## Quick start
 
 ```
