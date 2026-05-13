@@ -72,6 +72,24 @@ async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction
 export function createCliAuthRouter() {
   const router = express.Router();
 
+  // Stage 10c — terminal OTP. Returns the publicly-safe Supabase URL +
+  // anon key so the CLI can hit Supabase's /auth/v1/otp + /auth/v1/verify
+  // directly. Both values are intended to be public (same ones embedded
+  // in every browser bundle); we centralize them here so the CLI doesn't
+  // have to hardcode environment-specific URLs.
+  router.get("/auth/config", (_req: Request, res: Response) => {
+    const supabaseUrl = process.env.SUPABASE_URL || "";
+    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
+    if (!supabaseUrl || !supabaseAnonKey) {
+      res.status(503).json({
+        error: "supabase_not_configured",
+        message: "Server is missing SUPABASE_URL or SUPABASE_ANON_KEY. Use the browser pair flow.",
+      });
+      return;
+    }
+    res.json({ supabaseUrl, supabaseAnonKey });
+  });
+
   router.post("/start", (req: Request, res: Response) => {
     const code = String(req.body?.code || "");
     if (!CODE_PATTERN.test(code)) {

@@ -88,6 +88,14 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 10c (terminal-side OTP)
+- **`[B]rowser / [T]erminal` choice when auth is needed.** When the user picks `[F] find a match` while unauthenticated, the lounge now shows a choice surface instead of jumping straight to the browser pair. `[B]` runs the existing browser flow; `[T]` runs an in-terminal email + 6-digit OTP flow that never leaves the TUI.
+- **Headless auto-pick.** On native Linux without `$DISPLAY`/`$WAYLAND_DISPLAY` (SSH, Docker, CI), the choice is skipped and the user lands directly in the email entry — browser pair is impossible there anyway.
+- **`backend/src/routes/cliAuth.ts`** — new `GET /api/cli/auth/config` returns `{supabaseUrl, supabaseAnonKey}` from env (both are publicly-safe; same values embedded in every browser bundle). 503 with a clear message if env isn't set. Requires `SUPABASE_ANON_KEY` env var on Render.
+- **`cli/lib/auth.js`** — new helpers: `fetchSupabaseConfig`, `requestOtp` (`POST {supabase}/auth/v1/otp`), `verifyOtp` (`POST {supabase}/auth/v1/verify`), `persistTerminalSession`. All hit Supabase REST directly; no new dep, no service-key dance.
+- **`cli/components/AuthPrompt.mjs`** (new, ~230 LOC) — owns the choice / email / sending / code / verifying / error state machine. Email validated by regex; code auto-submits at 6 digits; rate-limit responses surface as "Wait a minute and try again."
+- **`cli/play.mjs`** — new `appPhase: "auth_choice"`, new `OPEN_AUTH_CHOICE` and `AUTH_CANCELLED` reducer actions, parent `useInput` short-circuits during `auth_choice` so the child component owns keystrokes.
+
 ### Stage 10b (defer auth until pool match)
 - **Anonymous-by-default opening.** `waiting-lounge play/dock/attach` now lands the user in the lobby anonymously — no email prompt, no browser tab, just their generated handle (`blue-cursor-241`-style). Initial `appPhase` in `cli/play.mjs` changed from `"auth"` to `"connecting"`, and the auth+socket effect now reads existing token if present, otherwise connects anonymously.
 - **Bot matches work anonymously.** Backend `start_bot_match_now` no longer requires `me.userId`; `startBotMatchFor` accepts a synthetic `anon:${socket.id}` userId. Per Stage 3b.3, bot matches already skip `chargeAntes`/`settleGame` entirely — no platform points move regardless — so allowing anonymous play here is zero-risk.
