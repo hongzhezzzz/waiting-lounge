@@ -235,7 +235,30 @@ async function browserPairFlow({ onPairing }) {
 // ---------- public API ----------
 
 /**
+ * Returns a stored token if one exists and is usable, or null. Never triggers
+ * a pair flow — meant for "try to auth silently at app start, fall back to
+ * anonymous if no token." (Stage 10b "defer auth.")
+ *
+ * @returns {Promise<string | null>}
+ */
+async function getStoredToken() {
+  const stored = readTokenFile();
+  if (stored && tokenIsValid(stored.accessToken)) {
+    return stored.accessToken;
+  }
+  if (stored && stored.refreshToken) {
+    const refreshed = await refreshTokens(stored);
+    if (refreshed) return refreshed;
+    // Refresh failed — clear stale file so the next pair flow starts clean.
+    clearTokenFile();
+  }
+  return null;
+}
+
+/**
  * Returns a usable Supabase access token, prompting browser pair if needed.
+ * Called from action handlers that explicitly require auth (e.g. when the
+ * user picks "find a match" — real-points pool).
  *
  * @param {Object} hooks
  * @param {(info: {url: string, codeTail: string}) => void} [hooks.onPairing]
@@ -244,24 +267,14 @@ async function browserPairFlow({ onPairing }) {
  * @returns {Promise<string>} access token (Supabase JWT)
  */
 async function getAccessToken(hooks = {}) {
-  const stored = readTokenFile();
-
-  if (stored && tokenIsValid(stored.accessToken)) {
-    return stored.accessToken;
-  }
-
-  if (stored && stored.refreshToken) {
-    const refreshed = await refreshTokens(stored);
-    if (refreshed) return refreshed;
-    // Refresh failed — fall through to browser pair.
-    clearTokenFile();
-  }
-
+  const cached = await getStoredToken();
+  if (cached) return cached;
   return browserPairFlow(hooks);
 }
 
 /** Exported for testing/inspection. */
 module.exports = {
+  getStoredToken,
   getAccessToken,
   readTokenFile,
   writeTokenFile,

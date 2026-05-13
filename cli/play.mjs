@@ -51,7 +51,11 @@ const STATE_FILE = (() => {
 const COLLAPSED_THRESHOLD = parseInt(process.env.WL_DOCK_COLLAPSED_THRESHOLD ?? "6", 10);
 
 const initialState = {
-  appPhase: "auth",      // auth|pairing|connecting|lobby|searching|in_match|match_end|error
+  // Stage 10b: defer auth. App starts in "connecting" (anonymous socket
+  // negotiation) rather than "auth" (forced credentials prompt). The
+  // "pairing" phase only appears later when the user picks a real-points
+  // pool match without a token on disk.
+  appPhase: "connecting", // connecting|pairing|lobby|searching|in_match|match_end|error
   email: null,
   myHandle: null,
   mySocketId: null,
@@ -346,11 +350,19 @@ function App() {
     }
     if (state.appPhase === "lobby") {
       if (input === "f" || input === "F") {
+        // Stage 10b: pool matches require auth (real points). If we don't
+        // have a token yet, trigger the pair flow first; runAuthAndJoinPool
+        // re-emits queue_for_pool once the new socket is up.
+        if (!tokenRef.current) {
+          runAuthAndJoinPool();
+          return;
+        }
         if (sockRef.current) {
           sockRef.current.emit("queue_for_pool", { gameType: "brain_bet" });
           dispatch({ type: "BEGIN_SEARCH" });
         }
       } else if (input === "b" || input === "B") {
+        // Bot matches work anonymously (Stage 10b backend tweak).
         if (sockRef.current) {
           sockRef.current.emit("start_bot_match_now", { gameType: "brain_bet" });
           dispatch({ type: "BEGIN_SEARCH" });
@@ -418,21 +430,21 @@ function App() {
     return () => clearInterval(t);
   }, [state.appPhase]);
 
-  // -------- auth + socket setup --------
+  // -------- socket setup (Stage 10b: anonymous-by-default) --------
+  // Try to read a stored token from disk; if present + valid, connect
+  // authenticated. Otherwise, connect anonymously and let the user
+  // browse the lobby + play bot matches without ever signing in. Auth
+  // is triggered lazily by `runAuthAndJoinPool` below when the user
+  // picks a real-points pool match.
   useEffect(() => {
     let cancelled = false;
 
     async function run() {
       try {
-        const token = await auth.getAccessToken({
-          onPairing: ({ url, codeTail }) => {
-            if (cancelled) return;
-            dispatch({ type: "AUTH_PAIRING", url, codeTail });
-          },
-        });
+        const token = await auth.getStoredToken();
         if (cancelled) return;
         tokenRef.current = token;
-        const email = extractEmailFromJwt(token);
+        const email = token ? extractEmailFromJwt(token) : null;
         dispatch({ type: "AUTH_CONNECTING", email });
 
         const backendUrl = config.readBackendUrl();
@@ -440,7 +452,9 @@ function App() {
           transports: ["websocket", "polling"],
           reconnection: true,
           reconnectionAttempts: 10,
-          auth: { token },
+          // Anonymous if no token — backend's optional-auth middleware
+          // (sockets.ts:266) accepts the empty handshake.
+          auth: token ? { token } : {},
         });
         sockRef.current = sock;
         wireSocket(sock, dispatch, () => stateRef.current);
@@ -459,6 +473,40 @@ function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Triggered when the user picks [F] find-a-match while not signed in.
+  // Runs the (browser) pair flow, then disconnects the anonymous socket
+  // and reconnects authenticated, then emits queue_for_pool. The state
+  // machine transitions are: lobby → pairing → connecting → lobby →
+  // searching (queue_for_pool acknowledged).
+  async function runAuthAndJoinPool() {
+    try {
+      const token = await auth.getAccessToken({
+        onPairing: ({ url, codeTail }) =>
+          dispatch({ type: "AUTH_PAIRING", url, codeTail }),
+      });
+      tokenRef.current = token;
+      const email = extractEmailFromJwt(token);
+      try { sockRef.current?.disconnect(); } catch {}
+      dispatch({ type: "AUTH_CONNECTING", email });
+
+      const backendUrl = config.readBackendUrl();
+      const sock = io(backendUrl, {
+        transports: ["websocket", "polling"],
+        reconnection: true,
+        reconnectionAttempts: 10,
+        auth: { token },
+      });
+      sockRef.current = sock;
+      wireSocket(sock, dispatch, () => stateRef.current);
+      // socket.io buffers emits until connected, so we can queue right
+      // away — no need to wait for "welcome" here.
+      sock.emit("queue_for_pool", { gameType: "brain_bet" });
+      dispatch({ type: "BEGIN_SEARCH" });
+    } catch (err) {
+      dispatch({ type: "AUTH_ERROR", error: err && err.message ? err.message : String(err) });
+    }
+  }
 
   // Stage 6a: write a state snapshot on every change for the statusline
   // integration in 6b. Atomic write (.tmp + rename) so a concurrent
@@ -673,20 +721,26 @@ function renderLobby(state) {
   const greeting =
     state.myHandle && state.email ? `${state.email}  ·  handle ` :
     state.email ? `${state.email}` :
+    state.myHandle ? "anonymous  ·  handle " :
     "Connected.";
+  const anon = !state.email;
   return h(Box, { flexDirection: "column" },
     // Identity row.
     h(Box, null,
-      h(Text, { color: C.success }, "● "),
+      h(Text, { color: anon ? C.warning : C.success }, anon ? "○ " : "● "),
       h(Text, null, greeting),
       state.myHandle ? h(Text, { color: C.brand, bold: true }, state.myHandle) : null,
     ),
+    anon
+      ? h(Text, { dimColor: true }, "  Sign in by picking [F] when you want points to save.")
+      : null,
 
     // Primary CTA — find a real opponent.
     h(Box, { marginTop: 1, flexDirection: "column" },
       h(Box, null,
         h(Key, { label: "F" }),
         h(Text, { color: C.brand, bold: true }, " Find a match"),
+        anon ? h(Text, { dimColor: true }, "  (signs you in first)") : null,
       ),
       h(Text, { dimColor: true }, "  Brain Bet  ·  5 min  ·  100-pt ante  ·  bot fills after 30s if nobody pairs"),
     ),
@@ -696,6 +750,7 @@ function renderLobby(state) {
       h(Box, null,
         h(Key, { label: "B", color: C.peer }),
         h(Text, { color: C.peer, bold: true }, " Play a bot now"),
+        anon ? h(Text, { dimColor: true }, "  (no sign-in needed)") : null,
       ),
       h(Text, { dimColor: true }, "  Skip the wait — instant practice match. No points change hands."),
     ),

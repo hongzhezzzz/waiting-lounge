@@ -89,7 +89,13 @@ function startBotMatchFor(
   ante: number,
 ): boolean {
   const human = users.get(humanSocketId);
-  if (!human || !human.userId || human.roomId) return false;
+  // Anonymous bot matches: the human may not have a Supabase userId yet
+  // (Stage 10b "defer auth"). Stage 3b.3 already guarantees bot matches
+  // skip chargeAntes/settleGame, so an ephemeral synthetic id is safe.
+  // Reconnect-to-bot-match is not supported for anonymous users — the
+  // synthetic id is bound to this socket only.
+  if (!human || human.roomId) return false;
+  const humanUserId = human.userId || `anon:${humanSocketId}`;
 
   // Synthetic bot identity — never inserted into `users` Map, never
   // hits the DB. Handle prefix `lounge-bot-` is the public signal the
@@ -103,7 +109,7 @@ function startBotMatchFor(
 
   const roomId = uuid();
   const players: GamePlayer[] = [
-    { socketId: humanSocketId, userId: human.userId, handle: human.handle, score: 0, disconnectedAt: null },
+    { socketId: humanSocketId, userId: humanUserId, handle: human.handle, score: 0, disconnectedAt: null },
     { socketId: botSocketId, userId: botUserId, handle: botHandle, score: 0, disconnectedAt: null },
   ];
   const game: Game = {
@@ -559,22 +565,28 @@ export function registerSocketHandlers(io: Server) {
     });
 
     // Bot-now: skip the pool wait, start a bot match immediately.
-    // Same preconditions as queue_for_pool. Triggered by the [B] key
-    // in the TUI lobby and the "Play bot now" button on the web lobby.
+    // Triggered by the [B] key in the TUI lobby and the "Play bot now"
+    // button on the web lobby.
+    //
+    // Stage 10b — anonymous bots: previously this required `me.userId`
+    // (i.e. browser/CLI was signed in). Since Stage 3b.3 bot matches
+    // already skip the chargeAntes/settleGame pipeline entirely, there's
+    // no business reason to gate them behind auth. We now allow null
+    // userId; the balance check is also skipped for anon (they have no
+    // balance to deduct).
     socket.on("start_bot_match_now", async (payload: { gameType?: string }) => {
-      if (!me.userId) {
-        return socket.emit("error_message", { message: "Sign in to play games." });
-      }
       const gameType = (payload?.gameType || "").toString() as GameType;
       if (!ALLOWED_GAME_TYPES.includes(gameType)) {
         return socket.emit("error_message", { message: "Invalid game type." });
       }
       if (me.roomId) await cleanupCurrentRoom(socket, me);
-      const balance = await getBalance(me.userId);
-      if (balance == null || balance < POOL_DEFAULT_ANTE) {
-        return socket.emit("error_message", {
-          message: `Not enough points (${balance ?? 0} < ${POOL_DEFAULT_ANTE}).`,
-        });
+      if (me.userId) {
+        const balance = await getBalance(me.userId);
+        if (balance == null || balance < POOL_DEFAULT_ANTE) {
+          return socket.emit("error_message", {
+            message: `Not enough points (${balance ?? 0} < ${POOL_DEFAULT_ANTE}).`,
+          });
+        }
       }
       // Cancel any pending pool-bot timer + remove from any queues —
       // we're going straight to bot, no waiting room.
