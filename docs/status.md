@@ -88,6 +88,19 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 11a (TUI Q-key flow fix)
+- **Bug:** Q during a match (or while searching) quit the entire lounge instead of returning to the lobby. The forfeit-confirm dialog's Y also did `cleanExit` — exiting the app rather than leaving the match.
+- **Fix — Q is now phase-aware** (`cli/play.mjs`):
+  - `in_match` → opens the forfeit confirm dialog. Y emits `forfeit_game` + `RETURN_TO_LOBBY` (socket stays alive, you can re-queue immediately). N keeps playing.
+  - `searching` → cancels the queue + returns to lobby (same as the existing `[X]`).
+  - `match_end` → returns to lobby (was accidentally correct before; now explicit).
+  - `lobby` → opens a new `quit` confirm dialog. Y exits, N stays. `Esc` from the lobby still quits immediately (power-user shortcut).
+  - `connecting` / `pairing` / `error` → quit (no active state to back out of).
+- **Backend:** new `forfeit_game` socket event in `backend/src/sockets.ts` — notifies the game runner (same path as the disconnect handler's grace timer, so the opponent gets their win) then clears `me.roomId` so the forfeiter is free to re-queue without reconnecting. `leave_room` only handled chat rooms, never games — that's why a dedicated event was needed.
+- **`RETURN_TO_LOBBY`** now also clears `confirmDialog` + `toast` so a forfeit-confirm doesn't paint over the lobby.
+- **Confirm dialog** render handles both `forfeit` and `quit` types; tightened to two content lines (title + hint) so it stays fully visible on a short terminal under the tall in-match view.
+- **Footers updated:** `searching` → `[X] cancel · [Q] back to lobby`; `match_end` → `[any key] back to lobby`.
+
 ### Stage 10e (attach Mac-friendly bindings)
 - **Bug:** `waiting-lounge attach` documented `Ctrl-B + ↑/↓` for pane switch and `Ctrl-B + Ctrl-↑/↓` for resize. On macOS, Mission Control intercepts `Ctrl + arrow` at the OS level before tmux can see them, so the bindings effectively don't work.
 - **Fix:** `attach.js` now captures the lounge + claude pane IDs at attach time and binds `Ctrl-L` (no prefix needed) in tmux's `root` keytable. First press expands the lounge to ~30% and focuses it; second press collapses back to 1 row and focuses claude. Same pattern as `dock`. The pane IDs are baked into the binding so the toggle works regardless of intervening tmux activity. Toggle handler wraps all `tmux` calls in try/catch per the Stage 10a lesson.
