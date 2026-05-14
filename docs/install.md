@@ -49,6 +49,16 @@ Token is saved at `~/.waiting-lounge/auth_token` (mode 0600). Refresh is automat
 | `waiting-lounge attach` | adds a 1-row lounge strip to the CURRENT tmux session (run via `! waiting-lounge attach` from inside claude). Press `Ctrl-L` (no prefix) to expand the strip and focus it, press again to collapse + return focus to claude. |
 | `waiting-lounge play` | full-screen lounge in this terminal (no claude alongside). |
 
+From the lobby (any of the three open commands), these keys open extra scenes — `Q` returns to the lobby from each:
+
+| Key | Scene |
+|-----|-------|
+| `[F]` | find a real-points pool match |
+| `[B]` | instant bot match (anonymous, no points) |
+| `[M]` | message board — 24h-TTL posts (read-only in the TUI for now) |
+| `[L]` | leaderboard — top 10 by points |
+| `[H]` | my profile — handle, points, recent games (anonymous users see a sign-in prompt) |
+
 ## Diagnostics
 
 | Command | What it does |

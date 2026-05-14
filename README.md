@@ -96,9 +96,10 @@ See [`docs/statusline-setup.md`](docs/statusline-setup.md) — paste one block i
 ## What's playable
 
 - **Brain Bet 2.0** — iterative-betting brain games. Each match is 5 rounds; round types include Indian Poker, Estimation, Chicken, Big-O, Geo Trivia, Stock Direction, Monty Mirage. Tier-based betting (Check / Raise / All-in / Fold). Plays in browser or terminal; pool matchmaking pairs you with the next idle human, or a labeled bot after 30s. Hit `[B]` from the lobby for an instant bot match.
-- **Daily Brain Bet** — solo, 3 rounds, same puzzle for everyone each UTC day. Streak counter.
+- **Daily Brain Bet** — solo, 3 rounds, same puzzle for everyone each UTC day. Streak counter. (Browser only for now.)
 - **Spot the Bug** (browser only for now) — find the bug in 30 short snippets.
-- **Message board** — 24-hour TTL, report-and-hide, no accounts.
+- **Message board** — 24-hour TTL, report-and-hide, no accounts. Readable from the terminal via `[M]`; posting is browser-only for now.
+- **Leaderboard + profile** — top 10 by points, plus your handle / points / recent games. In the terminal via `[L]` and `[H]`.
 
 ## Documentation
 
