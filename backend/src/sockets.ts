@@ -412,6 +412,21 @@ export function registerSocketHandlers(io: Server) {
       leaveRoom(socket, me, "left");
     });
 
+    // Stage 11a — deliberate forfeit that keeps the socket alive.
+    // `leave_room` only handles chat rooms; for an active game we need to
+    // notify the runner (same path the disconnect handler uses) so the
+    // opponent gets their win, then clear me.roomId so this player is
+    // free to return to the lobby and re-queue without reconnecting.
+    socket.on("forfeit_game", () => {
+      if (!me.roomId) return;
+      const gameId = roomGame.get(me.roomId);
+      if (gameId) {
+        const runner = getRunner(gameId);
+        runner?.handleDisconnect(socket.id);
+      }
+      me.roomId = null;
+    });
+
     socket.on("report_user", (payload: { peerHandle?: string; reason?: string }) => {
       log("report", {
         reporter: me.handle,

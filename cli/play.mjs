@@ -254,6 +254,10 @@ function reducer(state, action) {
         chatMessages: [],
         chatMode: false,
         chatInput: "",
+        // Stage 11a: clear any open confirm dialog so it doesn't paint
+        // over the lobby after a forfeit-confirm → return-to-lobby.
+        confirmDialog: null,
+        toast: null,
       };
     case "BET_TICK":
       return { ...state, betSecondsLeft: state.betSecondsLeft != null ? Math.max(0, state.betSecondsLeft - 1) : null };
@@ -306,11 +310,21 @@ function App() {
     // the user is typing their email).
     if (state.appPhase === "auth_choice") return;
     // Confirm dialog open: only Y/N (or Enter/Esc) is accepted.
+    // Stage 11a: two dialog types —
+    //   "forfeit" → Y leaves the current match and returns to the lobby
+    //               (NOT app exit). The socket stays alive so the user
+    //               can immediately re-queue. The backend's forfeit_game
+    //               handler notifies the runner so the opponent wins.
+    //   "quit"    → Y exits the whole app (lobby-level quit guardrail).
     if (state.confirmDialog) {
       if (input === "y" || input === "Y" || key.return) {
-        // Forfeit confirmed — disconnect cleanly. Server's 10s grace
-        // timer expires and the opponent (or bot) wins by forfeit.
-        cleanExit(sockRef.current, exit);
+        if (state.confirmDialog === "forfeit") {
+          try { sockRef.current?.emit("forfeit_game"); } catch {}
+          dispatch({ type: "RETURN_TO_LOBBY" });
+        } else {
+          // "quit" — leave the app.
+          cleanExit(sockRef.current, exit);
+        }
       } else if (input === "n" || input === "N" || key.escape) {
         dispatch({ type: "HIDE_CONFIRM" });
       }
@@ -351,13 +365,36 @@ function App() {
     }
 
     if (input === "q" || input === "Q" || key.escape) {
-      // In-match Q triggers a forfeit confirm; everywhere else, just exit.
-      if (state.appPhase === "in_match") {
-        dispatch({ type: "SHOW_CONFIRM", dialogType: "forfeit" });
-        return;
+      // Stage 11a: Q is phase-aware. The user's mental model is "Q goes
+      // back one step toward the lobby" — only the lobby itself quits
+      // the app (and even then, behind a confirm dialog). Esc is a
+      // power-user shortcut: in the lobby it quits without the dialog.
+      switch (state.appPhase) {
+        case "in_match":
+          dispatch({ type: "SHOW_CONFIRM", dialogType: "forfeit" });
+          return;
+        case "searching":
+          // Same as the [X] handler — cancel the queue, back to lobby.
+          try { sockRef.current?.emit("cancel_game_queue"); } catch {}
+          dispatch({ type: "RETURN_TO_LOBBY" });
+          return;
+        case "match_end":
+          dispatch({ type: "RETURN_TO_LOBBY" });
+          return;
+        case "lobby":
+          // Esc → quit immediately (power-user). Q → confirm first.
+          if (key.escape) {
+            cleanExit(sockRef.current, exit);
+          } else {
+            dispatch({ type: "SHOW_CONFIRM", dialogType: "quit" });
+          }
+          return;
+        default:
+          // connecting, pairing, error — no active state to back out
+          // of, so Q just quits.
+          cleanExit(sockRef.current, exit);
+          return;
       }
-      cleanExit(sockRef.current, exit);
-      return;
     }
     if (state.appPhase === "lobby") {
       if (input === "f" || input === "F") {
@@ -594,7 +631,7 @@ function App() {
       h(Text, { dimColor: true }, "  We'll re-sync within 10 seconds. You can keep watching."),
     ) : null,
 
-    state.confirmDialog === "forfeit" ? h(Box, {
+    state.confirmDialog ? h(Box, {
       marginTop: 1,
       borderStyle: B.strong,
       borderColor: C.danger,
@@ -602,14 +639,16 @@ function App() {
       paddingY: 0,
       flexDirection: "column",
     },
-      h(Text, { color: C.danger, bold: true }, "Forfeit this match?"),
-      h(Text, null, "You'll lose the antes already in the pot."),
-      h(Box, { marginTop: 1 },
-        h(Hint, { items: [
-          ["Y", " forfeit"],
-          ["N", " keep playing"],
-        ] }),
-      ),
+      // Stage 11a: kept to two content lines (title + hint) so the
+      // dialog stays fully visible even on a short terminal with the
+      // tall in-match view + chat panel above it.
+      state.confirmDialog === "forfeit"
+        ? h(Text, { color: C.danger, bold: true }, "Forfeit this match?  You'll lose the antes in the pot.")
+        : h(Text, { color: C.danger, bold: true }, "Quit Waiting Lounge?  Your saved sign-in stays."),
+      h(Hint, { items: state.confirmDialog === "forfeit"
+        ? [["Y", " forfeit & back to lobby"], ["N", " keep playing"]]
+        : [["Y", " quit"], ["N", " stay"]],
+      }),
     ) : null,
 
     state.toast ? h(Box, { marginTop: 1 },
@@ -646,7 +685,8 @@ function footerItems(state) {
     case "lobby":
       return [["F", " find match"], ["B", " bot now"], ["Q", " quit"]];
     case "searching":
-      return [["X", " cancel"], ["Q", " quit"]];
+      // Stage 11a: X and Q both cancel + return to lobby now.
+      return [["X", " cancel"], ["Q", " back to lobby"]];
     case "in_match": {
       const tail = [["T", " chat"], ["Q", " forfeit"]];
       if (state.round?.phase === "bet" && !state.myBet) {
@@ -661,7 +701,8 @@ function footerItems(state) {
       return ["waiting for opponent…", ...tail];
     }
     case "match_end":
-      return [["any key", " play again"], ["Q", " quit"]];
+      // Stage 11a: Q here returns to lobby like any other key, not quit.
+      return [["any key", " back to lobby"]];
     case "error":
       return [["Q", " quit"]];
     default:
