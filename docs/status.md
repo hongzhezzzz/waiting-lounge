@@ -88,6 +88,15 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **Pre-publish + post-public verification** captured in `docs/install-verification.md` (claude tarball-installed into isolated `/tmp/wl-prefix`; then anonymous `npm install -g github:…` post-public). Both clean.
 - **`--version` handler** added (was falling through to "Unknown command").
 
+### Stage 11b (board + leaderboard + profile in TUI)
+- **Three web features ported to the TUI.** The lobby gains an explore row: `[M] board`, `[L] leaderboard`, `[H] my profile`. Each opens a self-contained scene that fetches its own data and returns to the lobby on `Q` / `Esc`.
+- **`cli/components/Board.mjs`** — reads `GET /api/board`, renders the 24h-TTL posts (handle · relative time · #tag · body). `↑↓` or `j/k` scroll when there are more than 10 posts; `R` refreshes. Read-only first cut — posting from the TUI is a deferred follow-up.
+- **`cli/components/Leaderboard.mjs`** — reads `GET /api/leaderboard?limit=10`, renders the ranked table with 🥇🥈🥉 medals. The signed-in user's own row is highlighted green with a `← you` marker.
+- **`cli/components/Profile.mjs`** — anonymous users see a "playing anonymously — pick [F] to sign in" prompt; signed-in users see an identity card (handle · email · points · daily refill) plus recent game history from `GET /api/me` + `/api/me/game-history`.
+- **`cli/lib/api.js`** (new) — tiny `fetchJson` helper using Node 18's global `fetch` + `AbortController` (40s timeout for Render cold-starts). No new dependency.
+- **`cli/play.mjs`** — new `board`/`leaderboard`/`profile` appPhases + `OPEN_*` reducer actions; the three components mount as peers of `renderScene` (same pattern as `AuthPrompt`); parent `useInput` short-circuits while they're up so they own their own keystrokes; `renderFooter` returns null for child-owned phases (also fixes a pre-existing double-footer on `auth_choice`).
+- **Backend unchanged** — all three routes already existed.
+
 ### Stage 11a (TUI Q-key flow fix)
 - **Bug:** Q during a match (or while searching) quit the entire lounge instead of returning to the lobby. The forfeit-confirm dialog's Y also did `cleanExit` — exiting the app rather than leaving the match.
 - **Fix — Q is now phase-aware** (`cli/play.mjs`):
