@@ -28,3 +28,6 @@ out/
 # Phase-11 dev test scripts (kept for re-running, not for prod).
 backend/test-*.mjs
 backend/_polyfill-*.mjs
+
+# Build-artifact strays from tsc --watch shutdowns.
+backend/dist-stale-*/

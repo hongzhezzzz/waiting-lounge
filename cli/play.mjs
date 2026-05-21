@@ -34,9 +34,6 @@ import { GeoTriviaRound } from "./components/rounds/GeoTrivia.mjs";
 import { StockDirectionRound } from "./components/rounds/StockDirection.mjs";
 import { CollapsedStrip } from "./components/CollapsedStrip.mjs";
 import { AuthPrompt } from "./components/AuthPrompt.mjs";
-import { Board } from "./components/Board.mjs";
-import { Leaderboard } from "./components/Leaderboard.mjs";
-import { Profile } from "./components/Profile.mjs";
 import { C, B, BRAND, Banner, Footer, Hint, Key, PhasePill } from "./lib/theme.mjs";
 
 // CLI flags. --dock switches the App into dock-mode rendering
@@ -59,7 +56,9 @@ const initialState = {
   // negotiation) rather than "auth" (forced credentials prompt). The
   // "pairing" phase only appears later when the user picks a real-points
   // pool match without a token on disk.
-  appPhase: "connecting", // connecting|auth_choice|pairing|lobby|searching|in_match|match_end|board|leaderboard|profile|error
+  // Stage 12a: dropped board/leaderboard/profile phases — TUI is now
+  // game + in-game chat only. Those features remain on the web.
+  appPhase: "connecting", // connecting|auth_choice|pairing|lobby|searching|in_match|match_end|error
   email: null,
   myHandle: null,
   mySocketId: null,
@@ -272,15 +271,6 @@ function reducer(state, action) {
       return { ...state, confirmDialog: action.dialogType };
     case "HIDE_CONFIRM":
       return { ...state, confirmDialog: null };
-    // Stage 11b: lobby side-scenes. Each component fetches its own data;
-    // the reducer just flips appPhase. Q inside the scene dispatches
-    // RETURN_TO_LOBBY (handled by the components' onBack callback).
-    case "OPEN_BOARD":
-      return { ...state, appPhase: "board" };
-    case "OPEN_LEADERBOARD":
-      return { ...state, appPhase: "leaderboard" };
-    case "OPEN_PROFILE":
-      return { ...state, appPhase: "profile" };
     case "CHAT_TOGGLE":
       return { ...state, chatMode: !state.chatMode, chatInput: "" };
     case "CHAT_INPUT_APPEND":
@@ -317,16 +307,10 @@ function App() {
 
   // -------- input --------
   useInput((input, key) => {
-    // Stage 10c / 11b: child components own their own keystrokes during
-    // these phases (AuthPrompt, Board, Leaderboard, Profile). Bail out so
-    // we don't double-handle (e.g. Q exiting the app while the user is
-    // typing their email, or scrolling the board).
-    if (
-      state.appPhase === "auth_choice" ||
-      state.appPhase === "board" ||
-      state.appPhase === "leaderboard" ||
-      state.appPhase === "profile"
-    ) {
+    // Stage 10c: child component (AuthPrompt) owns its own keystrokes
+    // during auth_choice. Bail out so we don't double-handle (e.g. Q
+    // exiting the app while the user is typing their email).
+    if (state.appPhase === "auth_choice") {
       return;
     }
     // Confirm dialog open: only Y/N (or Enter/Esc) is accepted.
@@ -438,16 +422,6 @@ function App() {
           sockRef.current.emit("start_bot_match_now", { gameType: "brain_bet" });
           dispatch({ type: "BEGIN_SEARCH" });
         }
-      } else if (input === "m" || input === "M") {
-        // Stage 11b: lobby side-scenes. The components own their own
-        // input + data fetch; the parent useInput short-circuits while
-        // they're mounted (see the early return near the top of this
-        // handler).
-        dispatch({ type: "OPEN_BOARD" });
-      } else if (input === "l" || input === "L") {
-        dispatch({ type: "OPEN_LEADERBOARD" });
-      } else if (input === "h" || input === "H") {
-        dispatch({ type: "OPEN_PROFILE" });
       }
       return;
     }
@@ -633,47 +607,22 @@ function App() {
   // area — without this, round transitions cause the terminal to
   // auto-scroll to keep the bottom in view, which reads as the screen
   // jumping on every new question.
-  // Stage 10c / 11b: certain phases mount a self-contained child
-  // component (which owns its own useInput) as a peer of renderScene.
-  // renderScene/renderFooter return null for those phases so they don't
-  // steal keystrokes or double-render a footer.
-  const backendUrl = config.readBackendUrl();
+  // Stage 10c: AuthPrompt is the one phase that mounts as a self-contained
+  // child component (owns its own useInput, prints its own footer).
+  // renderScene/renderFooter return null for that phase so it doesn't get
+  // double keystrokes or a stacked footer.
   function renderMainContent() {
-    switch (state.appPhase) {
-      case "auth_choice":
-        return h(AuthPrompt, {
-          defaultMode: state.authMode === "terminal" ? "email" : "choice",
-          onComplete: ({ accessToken }) => reconnectAndJoinPool(accessToken),
-          onBrowserChosen: () => runBrowserAuthAndJoinPool(),
-          onCancel: () => dispatch({ type: "AUTH_CANCELLED" }),
-        });
-      case "board":
-        return h(Board, {
-          backendUrl,
-          onBack: () => dispatch({ type: "RETURN_TO_LOBBY" }),
-        });
-      case "leaderboard":
-        return h(Leaderboard, {
-          backendUrl,
-          myHandle: state.myHandle,
-          onBack: () => dispatch({ type: "RETURN_TO_LOBBY" }),
-        });
-      case "profile":
-        return h(Profile, {
-          backendUrl,
-          token: tokenRef.current,
-          onBack: () => dispatch({ type: "RETURN_TO_LOBBY" }),
-        });
-      default:
-        return renderScene(state);
+    if (state.appPhase === "auth_choice") {
+      return h(AuthPrompt, {
+        defaultMode: state.authMode === "terminal" ? "email" : "choice",
+        onComplete: ({ accessToken }) => reconnectAndJoinPool(accessToken),
+        onBrowserChosen: () => runBrowserAuthAndJoinPool(),
+        onCancel: () => dispatch({ type: "AUTH_CANCELLED" }),
+      });
     }
+    return renderScene(state);
   }
-  // Phases whose child component owns the whole UI (incl. its own footer).
-  const childOwnsUI =
-    state.appPhase === "auth_choice" ||
-    state.appPhase === "board" ||
-    state.appPhase === "leaderboard" ||
-    state.appPhase === "profile";
+  const childOwnsUI = state.appPhase === "auth_choice";
   return h(Box, { flexDirection: "column", padding: 1, height: rows, overflow: "hidden" },
     h(Banner, null),
 
@@ -746,7 +695,6 @@ function footerItems(state) {
     case "lobby":
       return [
         ["F", " find match"], ["B", " bot now"],
-        ["M", " board"], ["L", " leaderboard"], ["H", " profile"],
         ["Q", " quit"],
       ];
     case "searching":
@@ -892,16 +840,6 @@ function renderLobby(state) {
         anon ? h(Text, { dimColor: true }, "  (no sign-in needed)") : null,
       ),
       h(Text, { dimColor: true }, "  Skip the wait — instant practice match. No points change hands."),
-    ),
-
-    // Stage 11b: explore row — board / leaderboard / profile.
-    h(Box, { marginTop: 1 },
-      h(Key, { label: "M" }),
-      h(Text, { dimColor: true }, " board   "),
-      h(Key, { label: "L" }),
-      h(Text, { dimColor: true }, " leaderboard   "),
-      h(Key, { label: "H" }),
-      h(Text, { dimColor: true }, " my profile"),
     ),
   );
 }
