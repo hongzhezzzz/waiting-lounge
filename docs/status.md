@@ -3,7 +3,7 @@
 The truth about what currently works — not what is planned. Updated whenever a phase or feature changes state.
 
 ## Current phase
-**Stage 9 (frictionless one-line install) in flight.** `waiting-lounge install` now writes the 4 hook entries into `~/.claude/settings.json` automatically (with a timestamped backup) and auto-opens the pair URL in the user's default browser. Pure one-liner: `npm install -g github:hongzhezzzz/waiting-lounge && waiting-lounge install`. Cautious users can pass `--print-only` (no settings write, no browser open) or `--ask` (prompt before merging). Stage 8 (TUI polish) merged on 2026-05-13.
+**Stage 12 (betting-game lounge complete) ready for first poke.** TUI now opens to a six-key lobby — [F] find a match · [N] new room · [R] browse rooms · [J] join by code · [B] bot now · [Q] quit. Hosting picks ante / duration / visibility and prints a 6-char shareable code. Every two-human pairing runs through a 15-second match preview before antes are charged; either side can pass. Random pool also pulls from open public rooms. Board / leaderboard / profile dropped from the TUI per user scope reset — they remain on the web. Stage 11b merged on 2026-05-14.
 
 Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lounge.js {play,dock}` (terminal).
 
@@ -181,11 +181,24 @@ Live at https://waiting-lounge.vercel.app (browser) and via `node cli/waiting-lo
 - **`waiting-lounge status`** — `✓` / `✗` indicators on each check; brand mark.
 - **`waiting-lounge attach`** — Ctrl-B+x clarification: switch focus FIRST (per user's prior observation that Ctrl-B+x can kill claude when claude has focus).
 
+### Stage 12 (betting-game lounge — host / browse / join-by-code / preview)
+- **Scope reset.** TUI is now game + in-game chat only. Stage 11b's board / leaderboard / profile are no longer reachable from the lobby (components stay on disk; web keeps the features). Lobby keymap simplifies to `[F]` find · `[N]` new room · `[R]` browse · `[J]` join · `[B]` bot · `[Q]` quit.
+- **Host a room** (`[N]`). Configure wizard picks game (Brain Bet for now), ante (25 / 50 / 100 / 250 / 500), duration (1 / 5 / 10 min), and visibility (public / private). Pressing Enter opens the room and returns a 6-character code from a no-ambiguity alphabet (`K7XQM4` style — no 0/O/1/I/L). One open public room per user; second-create cancels the first. 10-minute idle TTL.
+- **Browse rooms** (`[R]`). Polled list of open public rooms, refreshed every 5 s. Arrow keys (or `j/k`) navigate, `Enter` joins, `R` refreshes manually. Empty state points back to `[N]`.
+- **Join by code** (`[J]`). 6-cell input box, validates against the safe alphabet, normalizes whitespace + dashes + lowercase before submit. The probe `K7-xqm4` and ` K7XQM4 ` both resolve correctly.
+- **Match preview invariant.** Every human-vs-human pairing — random pool, code join, browse join, or random-pool-into-public-room — opens a 15-second preview between both sockets before `chargeAntes` runs. Both see the stakes + opponent + game type; both must press `Y` (or `Enter`) to start. Either passes (`N` / `Esc`) and both return to the lobby; if the joiner came in via a hosted room, the room re-opens for the next joiner. Bot matches and existing invite flows skip the preview (the latter already has explicit acceptance).
+- **Random pool consumes public rooms** (Stage 12c). After checking the standard pool queue, the matcher also looks for an open public room with the same game type the queuer can afford (host online, no self-match, no block). Oldest eligible room wins. The queuer inherits the host's stakes (which may exceed pool defaults) and sees them in the preview — they decline if they don't like them.
+- **Backend additions.** `backend/src/lib/roomCode.ts` (generator + normalize + validate, 3 unit tests). New `HostedRoom`, `MatchPreview`, `MatchPreviewSource`, `RoomVisibility` types in `state.ts` + their in-memory registries. `backend/src/sockets.ts` grows `pairForPreview` / `consumeMatchPreviewAndStart` / `cancelMatchPreview` helpers; new socket events `create_room` / `cancel_room` / `list_open_rooms` / `join_room_by_code` / `accept_match_preview` / `decline_match_preview`. Disconnect handler cleans up rooms + previews owned by the dropping socket.
+- **TUI additions.** Four new ink components — `HostRoom.mjs`, `BrowseRooms.mjs`, `JoinByCode.mjs`, `MatchPreview.mjs`. Each owns its own `useInput` and is mounted as a peer of `renderScene` in `play.mjs`. The `pendingPostAuthAction` bridge replaces the single-purpose `reconnectAndJoinPool` — after sign-in, the user lands wherever they intended (find / host / browse / join). All four require auth (or auth-gate on the next emit); browse is open to anonymous read-only.
+- **Verified.** Backend `tsc --noEmit` clean. `node --test backend/src/lib/__tests__/roomCode.test.mjs` passes 3/3. Protocol probe against local backend confirms: anonymous welcome event, `create_room` / `join_room_by_code` are auth-gated, `list_open_rooms` returns an array event to anonymous sockets, server stays up under malformed input. Full host→join→preview→game flow needs real auth and will be exercised by manual two-TUI testing against the deployed backend.
+
 ## Deferred to 6c.2/7
 - **6c.2 — Multiplexer polish.** Real-claude integration testing: alt-screen handling if claude uses it, edge cases on resize, lounge-child crash banner, "design phase" UX issues raised in 6c.1 testing (deferred per user). Validate against macOS Terminal, iTerm2, Linux gnome-terminal, WSL Windows Terminal, ssh into each.
 - **5.2 — Spot the Bug in TUI.** Needs cli-highlight for syntax. ~2 days.
-- **5.4 — Lounge member list + invites in TUI.** Polled list, k/j navigation, Enter to invite.
+- **5.4 — Lounge member list + invites in TUI.** Polled list, k/j navigation, Enter to invite. (Partially obsoleted by Stage 12 — code-join + browse replace the lounge-member directory for the betting-game use case.)
 - **5.5 — Solo Brain Bet Storm** (Lichess-style timed solo run). Carryover from Stage 4 deferral.
+- **12d — Rematch on match-end.** One-tap challenge to the same opponent with the same settings. Likely lands as a small invite_to_game emit with peer's userId pinned at game-resolve time.
+- **12e — Web parity.** Hosted-rooms + browse + join-by-code + preview screens on the Next.js side. Backend already supports it; only the React UI is missing.
 - **Task #44 — Calibrate forfeit penalty.** Today voluntary leave refunds both antes; future fix should scale by progress + chip lead.
 
 ## Deployment
@@ -209,4 +222,4 @@ npm link
 This registers the local clone's `waiting-lounge` binary on your PATH (no sudo needed if your npm prefix points at `~/.npm-global` or similar). Without this, you'd type `node cli/waiting-lounge.js <cmd>` instead of `waiting-lounge <cmd>` — both work.
 
 ## Last updated
-2026-05-13 (Stage 8 TUI polish merged to main. Stage 9 frictionless install in flight — auto-merge settings + auto-open pair URL).
+2026-05-21 (Stage 12 betting-game lobby complete: host / browse / join-by-code / 15s match preview / pool consumes public rooms. Board / leaderboard / profile removed from TUI per scope reset. Stage 11b was last merged on 2026-05-14).

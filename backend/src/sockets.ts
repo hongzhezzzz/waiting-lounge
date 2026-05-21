@@ -193,6 +193,39 @@ function findHostedRoomByHostUserId(userId: string): HostedRoom | null {
   return null;
 }
 
+// Stage 12c — find a hosted-room candidate for a pool queuer.
+//
+// Criteria:
+//   - public visibility
+//   - matching gameType
+//   - not already in a preview (pendingPreviewId == null)
+//   - host is still online + not in a game
+//   - host hasn't blocked the queuer; queuer hasn't blocked the host
+//   - the queuer can afford the room's ante (balance >= room.ante)
+//   - hosts a different userId than the queuer (no self-match)
+// We pick the OLDEST eligible room — FIFO is the fairest scheduling
+// rule when hosts are otherwise indistinguishable.
+function findPoolRoomCandidate(
+  gameType: GameType,
+  queuer: UserInfo,
+  queuerBalance: number,
+): HostedRoom | null {
+  let best: HostedRoom | null = null;
+  for (const room of hostedRooms.values()) {
+    if (room.visibility !== "public") continue;
+    if (room.gameType !== gameType) continue;
+    if (room.pendingPreviewId !== null) continue;
+    if (room.hostUserId === queuer.userId) continue;
+    if (queuerBalance < room.ante) continue;
+    if (queuer.blocked.has(room.hostHandle)) continue;
+    const host = users.get(room.hostSocketId);
+    if (!host || !host.userId || host.roomId) continue;
+    if (host.blocked.has(queuer.handle)) continue;
+    if (!best || room.createdAt < best.createdAt) best = room;
+  }
+  return best;
+}
+
 function cancelHostedRoom(
   io: Server,
   code: string,
@@ -947,42 +980,68 @@ export function registerSocketHandlers(io: Server) {
         return true;
       });
 
-      if (peerIdx === -1) {
-        q.push(socket.id);
-        socket.emit("pool_waiting", { gameType, durationMin, ante });
-        log("pool_queued", { socketId: socket.id, key });
-        // Schedule bot fill if no real peer arrives within the window.
-        const existing = poolBotTimers.get(socket.id);
-        if (existing) clearTimeout(existing);
-        const timer = setTimeout(() => {
-          poolBotTimers.delete(socket.id);
-          // Re-check the world — only fill if the human is still
-          // waiting and not yet in a game.
-          const meNow = users.get(socket.id);
-          if (!meNow || meNow.roomId) return;
-          // Pull them out of the queue (the bot match replaces it).
-          removeFromGameQueues(socket.id);
-          startBotMatchFor(io, socket.id, gameType, durationMin, ante);
-        }, POOL_BOT_FILL_MS);
-        poolBotTimers.set(socket.id, timer);
+      if (peerIdx !== -1) {
+        // Real peer found in the pool queue — cancel any pending bot
+        // timer for either side, then pair via the preview flow.
+        const peerId = q.splice(peerIdx, 1)[0];
+        for (const sid of [socket.id, peerId]) {
+          const t = poolBotTimers.get(sid);
+          if (t) {
+            clearTimeout(t);
+            poolBotTimers.delete(sid);
+          }
+        }
+        const preview = pairForPreview(io, socket.id, peerId, gameType, durationMin, ante, "pool", null);
+        if (!preview) {
+          q.push(socket.id);
+          socket.emit("pool_waiting", { gameType, durationMin, ante });
+        }
         return;
       }
 
-      // Real peer found — cancel any pending bot timer for either
-      // side, then pair via the preview flow.
-      const peerId = q.splice(peerIdx, 1)[0];
-      for (const sid of [socket.id, peerId]) {
-        const t = poolBotTimers.get(sid);
+      // Stage 12c — no queue peer; look for an open public room with
+      // the same gameType the queuer can afford. The queuer inherits the
+      // room's stakes (which may exceed pool defaults) and sees them in
+      // the preview, so they can decline if the room is too rich. We
+      // prefer the OLDEST eligible room (FIFO across hosts).
+      const eligibleRoom = findPoolRoomCandidate(gameType, me, balance);
+      if (eligibleRoom) {
+        const t = poolBotTimers.get(socket.id);
         if (t) {
           clearTimeout(t);
-          poolBotTimers.delete(sid);
+          poolBotTimers.delete(socket.id);
         }
+        const preview = pairForPreview(
+          io,
+          socket.id,
+          eligibleRoom.hostSocketId,
+          eligibleRoom.gameType,
+          eligibleRoom.durationMin,
+          eligibleRoom.ante,
+          "hosted_room",
+          eligibleRoom.code,
+        );
+        if (preview) return; // room locked + preview emitted; we're done.
+        // Otherwise fall through to standard queue behaviour.
       }
-      const preview = pairForPreview(io, socket.id, peerId, gameType, durationMin, ante, "pool", null);
-      if (!preview) {
-        q.push(socket.id);
-        socket.emit("pool_waiting", { gameType, durationMin, ante });
-      }
+
+      q.push(socket.id);
+      socket.emit("pool_waiting", { gameType, durationMin, ante });
+      log("pool_queued", { socketId: socket.id, key });
+      // Schedule bot fill if no real peer arrives within the window.
+      const existing = poolBotTimers.get(socket.id);
+      if (existing) clearTimeout(existing);
+      const timer = setTimeout(() => {
+        poolBotTimers.delete(socket.id);
+        // Re-check the world — only fill if the human is still
+        // waiting and not yet in a game.
+        const meNow = users.get(socket.id);
+        if (!meNow || meNow.roomId) return;
+        // Pull them out of the queue (the bot match replaces it).
+        removeFromGameQueues(socket.id);
+        startBotMatchFor(io, socket.id, gameType, durationMin, ante);
+      }, POOL_BOT_FILL_MS);
+      poolBotTimers.set(socket.id, timer);
     });
 
     // Bot-now: skip the pool wait, start a bot match immediately.
