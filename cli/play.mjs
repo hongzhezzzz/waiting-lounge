@@ -34,6 +34,10 @@ import { GeoTriviaRound } from "./components/rounds/GeoTrivia.mjs";
 import { StockDirectionRound } from "./components/rounds/StockDirection.mjs";
 import { CollapsedStrip } from "./components/CollapsedStrip.mjs";
 import { AuthPrompt } from "./components/AuthPrompt.mjs";
+import { HostRoom } from "./components/HostRoom.mjs";
+import { BrowseRooms } from "./components/BrowseRooms.mjs";
+import { JoinByCode } from "./components/JoinByCode.mjs";
+import { MatchPreview } from "./components/MatchPreview.mjs";
 import { C, B, BRAND, Banner, Footer, Hint, Key, PhasePill } from "./lib/theme.mjs";
 
 // CLI flags. --dock switches the App into dock-mode rendering
@@ -58,7 +62,9 @@ const initialState = {
   // pool match without a token on disk.
   // Stage 12a: dropped board/leaderboard/profile phases — TUI is now
   // game + in-game chat only. Those features remain on the web.
-  appPhase: "connecting", // connecting|auth_choice|pairing|lobby|searching|in_match|match_end|error
+  // Stage 12b: added host_room / browse_rooms / join_code / preview phases
+  // and the auth_then_host bridge that mirrors auth_then_pool.
+  appPhase: "connecting", // connecting|auth_choice|pairing|lobby|searching|in_match|match_end|host_room|browse_rooms|join_code|preview|error
   email: null,
   myHandle: null,
   mySocketId: null,
@@ -90,6 +96,21 @@ const initialState = {
   chatMessages: [],      // [{from: "me"|"peer", body, ts}]
   chatMode: false,       // true → keys go to chatInput, not game
   chatInput: "",         // in-progress text
+
+  // Stage 12b: room hosting + browse + preview-before-commit.
+  hostedRoom: null,      // { code, gameType, durationMin, ante, visibility, expiresAt }
+  openRooms: [],         // [{code, hostHandle, gameType, durationMin, ante, createdAt, pending}]
+  preview: null,         // { previewId, peerHandle, gameType, durationMin, ante, source, expiresAt }
+  previewSelfAccepted: false,
+  previewPeerAccepted: false,
+  // After preview is cancelled, surface the reason briefly (rendered as
+  // a toast). Stored separately from `toast` so the lobby-render can
+  // theme it (e.g. "Opponent passed — back in the lobby.").
+  previewLastReason: null,
+  // Pending post-auth action: when the user picks [F]/[N]/[R]/[J] while
+  // anonymous and confirms sign-in, we run the action after auth lands.
+  // Values: null | "find_match" | "host" | "browse" | "join_code"
+  pendingPostAuthAction: null,
 };
 
 function reducer(state, action) {
@@ -290,6 +311,66 @@ function reducer(state, action) {
         ...state,
         chatMessages: [...state.chatMessages, { from: "peer", body: action.body, ts: action.ts || Date.now() }],
       };
+    // Stage 12b — host/browse/join/preview phases.
+    case "OPEN_HOST":
+      return { ...state, appPhase: "host_room", hostedRoom: null };
+    case "OPEN_BROWSE":
+      return { ...state, appPhase: "browse_rooms", openRooms: [] };
+    case "OPEN_JOIN_CODE":
+      return { ...state, appPhase: "join_code" };
+    case "ROOM_CREATED":
+      return { ...state, hostedRoom: action.room, appPhase: "host_room" };
+    case "ROOM_CANCELLED":
+      // Backend cleared our hosted room (host_cancelled / ttl_expired /
+      // consumed). Clear our local copy. If we're still on the host_room
+      // scene, return to lobby; otherwise leave the phase alone (e.g.
+      // we're in a preview that just consumed the room — let the
+      // preview / game_started flow drive the next phase).
+      return {
+        ...state,
+        hostedRoom: null,
+        appPhase: state.appPhase === "host_room" ? "lobby" : state.appPhase,
+      };
+    case "ROOMS_LIST":
+      return { ...state, openRooms: action.rooms };
+    case "PREVIEW_OPENED":
+      return {
+        ...state,
+        appPhase: "preview",
+        preview: action.preview,
+        previewSelfAccepted: false,
+        previewPeerAccepted: false,
+        previewLastReason: null,
+      };
+    case "PREVIEW_SELF_ACCEPTED":
+      return { ...state, previewSelfAccepted: true };
+    case "PREVIEW_PEER_ACCEPTED":
+      return { ...state, previewPeerAccepted: true };
+    case "PREVIEW_CANCELLED":
+      return {
+        ...state,
+        preview: null,
+        previewSelfAccepted: false,
+        previewPeerAccepted: false,
+        previewLastReason: action.reason,
+        // Return to lobby unless we were hosting and the room reopens
+        // (host_room scene will show "ready again" via room state).
+        appPhase: state.hostedRoom ? "host_room" : "lobby",
+        toast: action.reasonText || state.toast,
+      };
+    case "PREVIEW_CONSUMED":
+      // Game is starting — clear preview state but leave appPhase alone
+      // (GAME_STARTED will flip it to in_match).
+      return {
+        ...state,
+        preview: null,
+        previewSelfAccepted: false,
+        previewPeerAccepted: false,
+      };
+    case "SET_PENDING_POST_AUTH":
+      return { ...state, pendingPostAuthAction: action.action };
+    case "CLEAR_PENDING_POST_AUTH":
+      return { ...state, pendingPostAuthAction: null };
     default:
       return state;
   }
@@ -307,10 +388,18 @@ function App() {
 
   // -------- input --------
   useInput((input, key) => {
-    // Stage 10c: child component (AuthPrompt) owns its own keystrokes
-    // during auth_choice. Bail out so we don't double-handle (e.g. Q
-    // exiting the app while the user is typing their email).
-    if (state.appPhase === "auth_choice") {
+    // Stage 10c / 12b: child components own their own keystrokes during
+    // these phases (AuthPrompt, HostRoom, BrowseRooms, JoinByCode,
+    // MatchPreview). Bail out so we don't double-handle (e.g. Q exiting
+    // the app while the user is typing their email, or [N] in the host
+    // wizard triggering the lobby's "new room" again).
+    if (
+      state.appPhase === "auth_choice" ||
+      state.appPhase === "host_room" ||
+      state.appPhase === "browse_rooms" ||
+      state.appPhase === "join_code" ||
+      state.appPhase === "preview"
+    ) {
       return;
     }
     // Confirm dialog open: only Y/N (or Enter/Esc) is accepted.
@@ -402,12 +491,8 @@ function App() {
     }
     if (state.appPhase === "lobby") {
       if (input === "f" || input === "F") {
-        // Stage 10b/c: pool matches require auth (real points).
         if (!tokenRef.current) {
-          // Stage 10c: open the [B]rowser / [T]erminal choice surface
-          // instead of jumping straight to the browser. Headless boxes
-          // skip the choice and go directly to terminal OTP since
-          // browser is impossible there.
+          dispatch({ type: "SET_PENDING_POST_AUTH", action: "find_match" });
           const headless = isHeadlessEnv();
           dispatch({ type: "OPEN_AUTH_CHOICE", mode: headless ? "terminal" : "choice" });
           return;
@@ -422,6 +507,30 @@ function App() {
           sockRef.current.emit("start_bot_match_now", { gameType: "brain_bet" });
           dispatch({ type: "BEGIN_SEARCH" });
         }
+      } else if (input === "n" || input === "N") {
+        // Host a new room. Requires auth (real points at stake).
+        if (!tokenRef.current) {
+          dispatch({ type: "SET_PENDING_POST_AUTH", action: "host" });
+          const headless = isHeadlessEnv();
+          dispatch({ type: "OPEN_AUTH_CHOICE", mode: headless ? "terminal" : "choice" });
+          return;
+        }
+        dispatch({ type: "OPEN_HOST" });
+      } else if (input === "r" || input === "R") {
+        // Browse open rooms. Browsing is read-only but joining requires
+        // auth — we gate at the join action, not the browse view, so
+        // anonymous users can see what's on offer.
+        dispatch({ type: "OPEN_BROWSE" });
+      } else if (input === "j" || input === "J") {
+        // Join by code. Auth gate triggered on submit (backend rejects
+        // anonymous join_room_by_code).
+        if (!tokenRef.current) {
+          dispatch({ type: "SET_PENDING_POST_AUTH", action: "join_code" });
+          const headless = isHeadlessEnv();
+          dispatch({ type: "OPEN_AUTH_CHOICE", mode: headless ? "terminal" : "choice" });
+          return;
+        }
+        dispatch({ type: "OPEN_JOIN_CODE" });
       }
       return;
     }
@@ -529,11 +638,18 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Common path after either browser OR terminal auth completes: tear
-  // down the anonymous socket, reconnect with the new token, then queue
-  // for pool. socket.io buffers emits until connected, so we can call
-  // sock.emit immediately after creating the connection.
-  function reconnectAndJoinPool(token) {
+  // Stage 12b — generalised post-auth dispatcher.
+  //
+  // Originally this function only queued for pool ("Find a match"). Now
+  // we may need to run any of: find_match, host (open the host
+  // configure scene), browse (open the browse scene), join_code (open
+  // the code-entry scene). The action is captured BEFORE auth via
+  // SET_PENDING_POST_AUTH and consumed here.
+  //
+  // Tearing down the anonymous socket and reconnecting with the token
+  // is unchanged. socket.io buffers emits until the new socket is
+  // connected, so it's safe to call sock.emit immediately.
+  function reconnectAndRunPostAuth(token) {
     tokenRef.current = token;
     const email = extractEmailFromJwt(token);
     try { sockRef.current?.disconnect(); } catch {}
@@ -548,19 +664,38 @@ function App() {
     });
     sockRef.current = sock;
     wireSocket(sock, dispatch, () => stateRef.current);
-    sock.emit("queue_for_pool", { gameType: "brain_bet" });
-    dispatch({ type: "BEGIN_SEARCH" });
+
+    const action = stateRef.current.pendingPostAuthAction;
+    dispatch({ type: "CLEAR_PENDING_POST_AUTH" });
+
+    if (action === "host") {
+      dispatch({ type: "OPEN_HOST" });
+    } else if (action === "browse") {
+      dispatch({ type: "OPEN_BROWSE" });
+    } else if (action === "join_code") {
+      dispatch({ type: "OPEN_JOIN_CODE" });
+    } else {
+      // Default = find_match (covers both null and "find_match" so a
+      // future generic [F]-without-pending still works).
+      sock.emit("queue_for_pool", { gameType: "brain_bet" });
+      dispatch({ type: "BEGIN_SEARCH" });
+    }
+  }
+
+  // Called when the terminal-OTP flow finishes inside AuthPrompt.
+  function onAuthCompleted(token) {
+    reconnectAndRunPostAuth(token);
   }
 
   // Browser path: open Supabase via /cli-pair, poll until authorized.
   // Called when the user picks [B] from the auth_choice surface.
-  async function runBrowserAuthAndJoinPool() {
+  async function runBrowserAuthAndFinishPendingAction() {
     try {
       const token = await auth.getAccessToken({
         onPairing: ({ url, codeTail }) =>
           dispatch({ type: "AUTH_PAIRING", url, codeTail }),
       });
-      reconnectAndJoinPool(token);
+      reconnectAndRunPostAuth(token);
     } catch (err) {
       dispatch({ type: "AUTH_ERROR", error: err && err.message ? err.message : String(err) });
     }
@@ -607,22 +742,87 @@ function App() {
   // area — without this, round transitions cause the terminal to
   // auto-scroll to keep the bottom in view, which reads as the screen
   // jumping on every new question.
-  // Stage 10c: AuthPrompt is the one phase that mounts as a self-contained
-  // child component (owns its own useInput, prints its own footer).
-  // renderScene/renderFooter return null for that phase so it doesn't get
-  // double keystrokes or a stacked footer.
+  // Stage 10c / 12b: certain phases mount a self-contained child
+  // component (owns its own useInput, prints its own footer).
+  // renderScene/renderFooter return null for those phases so they don't
+  // get double keystrokes or stacked footers.
   function renderMainContent() {
-    if (state.appPhase === "auth_choice") {
-      return h(AuthPrompt, {
-        defaultMode: state.authMode === "terminal" ? "email" : "choice",
-        onComplete: ({ accessToken }) => reconnectAndJoinPool(accessToken),
-        onBrowserChosen: () => runBrowserAuthAndJoinPool(),
-        onCancel: () => dispatch({ type: "AUTH_CANCELLED" }),
-      });
+    switch (state.appPhase) {
+      case "auth_choice":
+        return h(AuthPrompt, {
+          defaultMode: state.authMode === "terminal" ? "email" : "choice",
+          onComplete: ({ accessToken }) => onAuthCompleted(accessToken),
+          onBrowserChosen: () => runBrowserAuthAndFinishPendingAction(),
+          onCancel: () => {
+            dispatch({ type: "CLEAR_PENDING_POST_AUTH" });
+            dispatch({ type: "AUTH_CANCELLED" });
+          },
+        });
+      case "host_room":
+        return h(HostRoom, {
+          hostedRoom: state.hostedRoom,
+          onCreate: (settings) => {
+            try { sockRef.current?.emit("create_room", settings); } catch {}
+          },
+          onCancel: () => dispatch({ type: "RETURN_TO_LOBBY" }),
+          onCancelRoom: () => {
+            const code = state.hostedRoom?.code;
+            if (code) {
+              try { sockRef.current?.emit("cancel_room", { code }); } catch {}
+            }
+          },
+          onBack: () => dispatch({ type: "RETURN_TO_LOBBY" }),
+        });
+      case "browse_rooms":
+        return h(BrowseRooms, {
+          rooms: state.openRooms,
+          onRefresh: () => {
+            try { sockRef.current?.emit("list_open_rooms"); } catch {}
+          },
+          onJoin: (code) => {
+            // Auth gate before emitting; same anonymous→auth bridge
+            // pattern as the lobby's [F] / [J] handling.
+            if (!tokenRef.current) {
+              dispatch({ type: "SET_PENDING_POST_AUTH", action: "join_code" });
+              const headless = isHeadlessEnv();
+              dispatch({ type: "OPEN_AUTH_CHOICE", mode: headless ? "terminal" : "choice" });
+              return;
+            }
+            try { sockRef.current?.emit("join_room_by_code", { code }); } catch {}
+          },
+          onBack: () => dispatch({ type: "RETURN_TO_LOBBY" }),
+        });
+      case "join_code":
+        return h(JoinByCode, {
+          onSubmit: (code) => {
+            try { sockRef.current?.emit("join_room_by_code", { code }); } catch {}
+          },
+          onCancel: () => dispatch({ type: "RETURN_TO_LOBBY" }),
+        });
+      case "preview":
+        return state.preview
+          ? h(MatchPreview, {
+              preview: state.preview,
+              selfAccepted: state.previewSelfAccepted,
+              peerAccepted: state.previewPeerAccepted,
+              onAccept: () => {
+                try { sockRef.current?.emit("accept_match_preview", { previewId: state.preview.previewId }); } catch {}
+              },
+              onDecline: () => {
+                try { sockRef.current?.emit("decline_match_preview", { previewId: state.preview.previewId }); } catch {}
+              },
+            })
+          : null;
+      default:
+        return renderScene(state);
     }
-    return renderScene(state);
   }
-  const childOwnsUI = state.appPhase === "auth_choice";
+  const childOwnsUI =
+    state.appPhase === "auth_choice" ||
+    state.appPhase === "host_room" ||
+    state.appPhase === "browse_rooms" ||
+    state.appPhase === "join_code" ||
+    state.appPhase === "preview";
   return h(Box, { flexDirection: "column", padding: 1, height: rows, overflow: "hidden" },
     h(Banner, null),
 
@@ -694,8 +894,8 @@ function footerItems(state) {
       return [["Q", " quit"]];
     case "lobby":
       return [
-        ["F", " find match"], ["B", " bot now"],
-        ["Q", " quit"],
+        ["F", " find match"], ["N", " new room"], ["R", " browse rooms"],
+        ["J", " join by code"], ["B", " bot now"], ["Q", " quit"],
       ];
     case "searching":
       // Stage 11a: X and Q both cancel + return to lobby now.
@@ -830,6 +1030,25 @@ function renderLobby(state) {
         anon ? h(Text, { dimColor: true }, "  (signs you in first)") : null,
       ),
       h(Text, { dimColor: true }, "  Brain Bet  ·  5 min  ·  100-pt ante  ·  bot fills after 30s if nobody pairs"),
+    ),
+
+    // Stage 12b — host/browse/join lounge actions.
+    h(Box, { marginTop: 1, flexDirection: "column" },
+      h(Box, null,
+        h(Key, { label: "N" }),
+        h(Text, { color: C.brand, bold: true }, " New room"),
+        h(Text, { dimColor: true }, "    pick stakes, get a code, wait for a joiner"),
+      ),
+      h(Box, null,
+        h(Key, { label: "R" }),
+        h(Text, { color: C.brand, bold: true }, " Browse rooms"),
+        h(Text, { dimColor: true }, " see what's open right now"),
+      ),
+      h(Box, null,
+        h(Key, { label: "J" }),
+        h(Text, { color: C.brand, bold: true }, " Join by code"),
+        h(Text, { dimColor: true }, " paste a 6-character code from a friend"),
+      ),
     ),
 
     // Secondary CTA — instant bot.
@@ -1121,7 +1340,60 @@ function wireSocket(sock, dispatch, getState) {
     });
   });
 
+  // Stage 12b — hosted rooms.
+  sock.on("room_created", (p) => {
+    dispatch({ type: "ROOM_CREATED", room: p });
+  });
+  sock.on("room_cancelled", () => {
+    dispatch({ type: "ROOM_CANCELLED" });
+  });
+  sock.on("room_reopened", () => {
+    // No-op for now — the host's screen already shows "waiting" and
+    // the room state didn't change. If we want a "preview passed,
+    // ready again" cue, add it here.
+  });
+  sock.on("open_rooms", (p) => {
+    dispatch({ type: "ROOMS_LIST", rooms: Array.isArray(p?.rooms) ? p.rooms : [] });
+  });
+
+  // Stage 12b — match previews.
+  sock.on("match_preview", (p) => {
+    dispatch({
+      type: "PREVIEW_OPENED",
+      preview: {
+        previewId: p.previewId,
+        peerHandle: p.peerHandle,
+        gameType: p.gameType,
+        durationMin: p.durationMin,
+        ante: p.ante,
+        source: p.source,
+        expiresAt: p.expiresAt,
+      },
+    });
+  });
+  sock.on("match_preview_acked", () => {
+    dispatch({ type: "PREVIEW_SELF_ACCEPTED" });
+  });
+  sock.on("match_preview_peer_accepted", () => {
+    dispatch({ type: "PREVIEW_PEER_ACCEPTED" });
+  });
+  sock.on("match_preview_cancelled", (p) => {
+    const reason = p?.reason || "cancelled";
+    const byMe = !!p?.byMe;
+    const reasonText =
+      reason === "timeout" ? "Preview timed out — back in the lobby."
+      : reason === "declined" && !byMe ? "Opponent passed — back in the lobby."
+      : reason === "declined" && byMe ? "Passed."
+      : reason === "peer_disconnected" ? "Opponent disconnected."
+      : reason === "start_failed" ? "Could not start (likely a balance issue)."
+      : null;
+    dispatch({ type: "PREVIEW_CANCELLED", reason, reasonText });
+  });
+
   sock.on("game_started", (p) => {
+    // Stage 12b — if we arrived here via a preview, clear preview state
+    // so a future cancel-from-the-grave can't paint over the game UI.
+    dispatch({ type: "PREVIEW_CONSUMED" });
     dispatch({
       type: "GAME_STARTED",
       gameId: p.gameId,

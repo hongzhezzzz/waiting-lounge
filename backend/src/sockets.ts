@@ -13,6 +13,8 @@ import {
   games,
   roomGame,
   invites,
+  hostedRooms,
+  matchPreviews,
   type UserInfo,
   type Room,
   type Game,
@@ -20,17 +22,29 @@ import {
   type GameType,
   type GamePlayer,
   type Invite,
+  type HostedRoom,
+  type MatchPreview,
+  type MatchPreviewSource,
+  type RoomVisibility,
 } from "./state.js";
 import { verifySupabaseJwt } from "./auth/supabase.js";
 import { getOrCreateUser, getBalance } from "./auth/userStore.js";
 import { chargeAntes } from "./games/transferPoints.js";
 import { buildRunner, liveRunners, getRunner } from "./games/index.js";
+import { generateRoomCode, normalizeRoomCode, isValidRoomCode } from "./lib/roomCode.js";
 
 const MAX_MESSAGE_LEN = 500;
 const DEVICE_ID_PATTERN = /^[a-f0-9-]{8,64}$/i;
 const ALLOWED_GAME_TYPES: ReadonlyArray<GameType> = ["spot_the_bug", "brain_bet"];
 const ALLOWED_DURATIONS: ReadonlyArray<GameDuration> = [1, 5, 10];
+const ALLOWED_VISIBILITIES: ReadonlyArray<RoomVisibility> = ["public", "private"];
 const INVITE_TTL_MS = 30_000;
+
+// Stage 12b — hosted-room + preview constants.
+const ROOM_TTL_MS = 10 * 60_000;       // open rooms expire after 10 min idle.
+const MATCH_PREVIEW_TTL_MS = 15_000;   // 15s for both players to accept.
+const HOST_MIN_ANTE = 25;
+const HOST_MAX_ANTE = 1000;
 // Pool matchmaking ("Find a match") uses fixed defaults so all
 // queueing players land in the same per-gameType bucket.
 const POOL_DEFAULT_DURATION: GameDuration = 5;
@@ -151,8 +165,214 @@ function startBotMatchFor(
   return true;
 }
 
+// Stage 12b — hosted-room + match-preview helpers.
+//
+// Every pairing — pool match, code-join, browse-join — now opens a
+// MatchPreview before chargeAntes/startGameBetween runs. Both players
+// must accept within MATCH_PREVIEW_TTL_MS, otherwise the preview is
+// cancelled and both sides return to the lobby (with the host's room
+// re-opened if applicable). Invites (invite_to_game / accept_invite)
+// skip the preview because the invitee already explicitly accepted.
+
+function publicRoomSummary(room: HostedRoom) {
+  return {
+    code: room.code,
+    hostHandle: room.hostHandle,
+    gameType: room.gameType,
+    durationMin: room.durationMin,
+    ante: room.ante,
+    createdAt: room.createdAt,
+    pending: room.pendingPreviewId !== null,
+  };
+}
+
+function findHostedRoomByHostUserId(userId: string): HostedRoom | null {
+  for (const room of hostedRooms.values()) {
+    if (room.hostUserId === userId) return room;
+  }
+  return null;
+}
+
+function cancelHostedRoom(
+  io: Server,
+  code: string,
+  reason: "host_cancelled" | "host_disconnected" | "ttl_expired" | "consumed",
+) {
+  const room = hostedRooms.get(code);
+  if (!room) return;
+  if (room.ttlTimer) clearTimeout(room.ttlTimer);
+  hostedRooms.delete(code);
+  // Tell the host (the only socket subscribed to this room's lifecycle).
+  // "consumed" is fired right before game_started — we still send it so
+  // the host's UI knows their hosting screen can be cleared.
+  io.to(room.hostSocketId).emit("room_cancelled", { code, reason });
+  log("room_cancelled", { code, reason, host: room.hostHandle });
+}
+
+// Re-open a room after a preview was declined/timed out, so other
+// joiners can still find it. Called from cancelMatchPreview when the
+// preview had a hostedRoomCode.
+function reopenHostedRoom(io: Server, code: string) {
+  const room = hostedRooms.get(code);
+  if (!room) return;
+  room.pendingPreviewId = null;
+  // Reset the TTL — the room is fresh again from the host's POV.
+  if (room.ttlTimer) clearTimeout(room.ttlTimer);
+  room.ttlTimer = setTimeout(() => cancelHostedRoom(io, code, "ttl_expired"), ROOM_TTL_MS);
+  io.to(room.hostSocketId).emit("room_reopened", { code });
+}
+
+function emitMatchPreviewTo(io: Server, preview: MatchPreview, recipient: "a" | "b") {
+  const isA = recipient === "a";
+  const myUserId = isA ? preview.aUserId : preview.bUserId;
+  const peerHandle = isA ? preview.bHandle : preview.aHandle;
+  const targetSocketId = isA ? preview.aSocketId : preview.bSocketId;
+  // Rounds in a brain-bet match aren't fixed; use durationMin as a
+  // commit-estimate proxy. The TUI will translate to plain language.
+  const payload = {
+    previewId: preview.id,
+    peerHandle,
+    gameType: preview.gameType,
+    durationMin: preview.durationMin,
+    ante: preview.ante,
+    source: preview.source,
+    expiresAt: preview.expiresAt,
+    myUserId,
+  };
+  io.to(targetSocketId).emit("match_preview", payload);
+}
+
+function pairForPreview(
+  io: Server,
+  aSocketId: string,
+  bSocketId: string,
+  gameType: GameType,
+  durationMin: GameDuration,
+  ante: number,
+  source: MatchPreviewSource,
+  hostedRoomCode: string | null,
+): MatchPreview | null {
+  const a = users.get(aSocketId);
+  const b = users.get(bSocketId);
+  if (!a || !b || !a.userId || !b.userId) return null;
+  if (a.userId === b.userId) return null;
+  if (a.roomId || b.roomId) return null;
+
+  const previewId = uuid();
+  const now = Date.now();
+  const preview: MatchPreview = {
+    id: previewId,
+    aSocketId,
+    aUserId: a.userId,
+    aHandle: a.handle,
+    aAccepted: false,
+    bSocketId,
+    bUserId: b.userId,
+    bHandle: b.handle,
+    bAccepted: false,
+    gameType,
+    durationMin,
+    ante,
+    source,
+    hostedRoomCode,
+    createdAt: now,
+    expiresAt: now + MATCH_PREVIEW_TTL_MS,
+    expiryTimer: null,
+  };
+  preview.expiryTimer = setTimeout(
+    () => cancelMatchPreview(io, previewId, "timeout"),
+    MATCH_PREVIEW_TTL_MS,
+  );
+  matchPreviews.set(previewId, preview);
+
+  // If the joiner came in via a hosted room, lock the room so other
+  // joiners don't double-claim it while we wait for accepts.
+  if (hostedRoomCode) {
+    const room = hostedRooms.get(hostedRoomCode);
+    if (room) {
+      room.pendingPreviewId = previewId;
+      if (room.ttlTimer) {
+        clearTimeout(room.ttlTimer);
+        room.ttlTimer = null;
+      }
+    }
+  }
+
+  emitMatchPreviewTo(io, preview, "a");
+  emitMatchPreviewTo(io, preview, "b");
+  log("preview_opened", {
+    id: previewId,
+    a: a.handle,
+    b: b.handle,
+    source,
+    ante,
+    durationMin,
+  });
+  return preview;
+}
+
+function cancelMatchPreview(
+  io: Server,
+  previewId: string,
+  reason: "timeout" | "declined" | "peer_disconnected",
+  declinedBySocketId?: string,
+) {
+  const preview = matchPreviews.get(previewId);
+  if (!preview) return;
+  if (preview.expiryTimer) clearTimeout(preview.expiryTimer);
+  matchPreviews.delete(previewId);
+
+  // Re-open the hosted room so other joiners can still find it.
+  if (preview.hostedRoomCode) {
+    reopenHostedRoom(io, preview.hostedRoomCode);
+  }
+
+  for (const sid of [preview.aSocketId, preview.bSocketId]) {
+    io.to(sid).emit("match_preview_cancelled", {
+      previewId,
+      reason,
+      byMe: declinedBySocketId === sid,
+    });
+  }
+  log("preview_cancelled", { id: previewId, reason });
+}
+
+async function consumeMatchPreviewAndStart(io: Server, previewId: string) {
+  const preview = matchPreviews.get(previewId);
+  if (!preview) return;
+  // Only consume when BOTH sides have accepted.
+  if (!preview.aAccepted || !preview.bAccepted) return;
+  if (preview.expiryTimer) clearTimeout(preview.expiryTimer);
+  matchPreviews.delete(previewId);
+
+  // Burn the hosted room (if any) — the game is starting.
+  if (preview.hostedRoomCode) {
+    cancelHostedRoom(io, preview.hostedRoomCode, "consumed");
+  }
+
+  const ok = await startGameBetween(
+    io,
+    preview.aSocketId,
+    preview.bSocketId,
+    preview.gameType,
+    preview.durationMin,
+    preview.ante,
+  );
+  if (!ok) {
+    // chargeAntes failed (e.g. balance evaporated between preview emit
+    // and consume) — tell both sides and they return to the lobby.
+    for (const sid of [preview.aSocketId, preview.bSocketId]) {
+      io.to(sid).emit("match_preview_cancelled", {
+        previewId,
+        reason: "start_failed",
+      });
+    }
+  }
+}
+
 // Drives the actual game start once two specific socket ids are committed
-// to playing each other. Used by both queue_for_game and accept_invite.
+// to playing each other. Used by accept_invite and (via the preview
+// consumer) by pool / code-join / browse-join flows.
 // Returns true on success, false if anything went wrong (caller emits
 // the error).
 async function startGameBetween(
@@ -488,9 +708,12 @@ export function registerSocketHandlers(io: Server) {
       }
 
       const peerId = q.splice(peerIdx, 1)[0];
-      const ok = await startGameBetween(io, socket.id, peerId, gameType, durationMin, ante);
-      if (!ok) {
-        // Peer vanished or charge failed — re-queue self.
+      // Stage 12b — pop a preview instead of starting the game directly.
+      // Both sides see the stakes + peer handle and must accept within
+      // MATCH_PREVIEW_TTL_MS. Antes are NOT charged until both accept.
+      const preview = pairForPreview(io, socket.id, peerId, gameType, durationMin, ante, "pool", null);
+      if (!preview) {
+        // Peer vanished — re-queue self.
         q.push(socket.id);
         socket.emit("game_waiting", { gameType, durationMin, ante });
       }
@@ -504,6 +727,189 @@ export function registerSocketHandlers(io: Server) {
         poolBotTimers.delete(socket.id);
       }
       socket.emit("game_queue_cancelled", {});
+    });
+
+    // Stage 12b — create a hosted room.
+    //
+    // The host picks gameType, ante, durationMin, visibility. We
+    // generate a 6-char code (no-ambiguity alphabet) and stash the
+    // room in `hostedRooms`. Public rooms appear in `list_open_rooms`;
+    // private rooms are joinable by code only.
+    //
+    // Anti-spam: a single userId can only own one room at a time.
+    // Hosting one auto-cancels their previous open room.
+    socket.on("create_room", (payload: {
+      gameType?: string;
+      durationMin?: number;
+      ante?: number;
+      visibility?: string;
+    }) => {
+      if (!me.userId) {
+        return socket.emit("error_message", { message: "Sign in to host a room." });
+      }
+      const gameType = (payload?.gameType || "").toString() as GameType;
+      const durationMin = Number(payload?.durationMin) as GameDuration;
+      const ante = Number(payload?.ante);
+      const visibility = (payload?.visibility || "public").toString() as RoomVisibility;
+      if (!ALLOWED_GAME_TYPES.includes(gameType)) {
+        return socket.emit("error_message", { message: "Invalid game type." });
+      }
+      if (!ALLOWED_DURATIONS.includes(durationMin)) {
+        return socket.emit("error_message", { message: "Invalid duration." });
+      }
+      if (!ALLOWED_VISIBILITIES.includes(visibility)) {
+        return socket.emit("error_message", { message: "Invalid visibility." });
+      }
+      if (!Number.isInteger(ante) || ante < HOST_MIN_ANTE || ante > HOST_MAX_ANTE) {
+        return socket.emit("error_message", {
+          message: `Ante must be a whole number between ${HOST_MIN_ANTE} and ${HOST_MAX_ANTE}.`,
+        });
+      }
+      if (me.roomId) {
+        return socket.emit("error_message", {
+          message: "Finish your current game before hosting a new room.",
+        });
+      }
+      // One room per user — cancel any prior one.
+      const prior = findHostedRoomByHostUserId(me.userId);
+      if (prior) cancelHostedRoom(io, prior.code, "host_cancelled");
+
+      const code = generateRoomCode((c) => hostedRooms.has(c));
+      const room: HostedRoom = {
+        code,
+        hostSocketId: socket.id,
+        hostUserId: me.userId,
+        hostHandle: me.handle,
+        gameType,
+        durationMin,
+        ante,
+        visibility,
+        createdAt: Date.now(),
+        ttlTimer: null,
+        pendingPreviewId: null,
+      };
+      room.ttlTimer = setTimeout(() => cancelHostedRoom(io, code, "ttl_expired"), ROOM_TTL_MS);
+      hostedRooms.set(code, room);
+      socket.emit("room_created", {
+        code,
+        gameType,
+        durationMin,
+        ante,
+        visibility,
+        expiresAt: Date.now() + ROOM_TTL_MS,
+      });
+      log("room_created", { code, host: me.handle, gameType, ante, durationMin, visibility });
+    });
+
+    socket.on("cancel_room", (payload: { code?: string }) => {
+      const code = normalizeRoomCode((payload?.code || "").toString());
+      const room = hostedRooms.get(code);
+      if (!room) return;
+      // Only the host can cancel their room.
+      if (room.hostSocketId !== socket.id && room.hostUserId !== me.userId) return;
+      // If a preview is in flight, also cancel it (joiner returns to lobby).
+      if (room.pendingPreviewId) {
+        cancelMatchPreview(io, room.pendingPreviewId, "peer_disconnected");
+      }
+      cancelHostedRoom(io, code, "host_cancelled");
+    });
+
+    socket.on("list_open_rooms", () => {
+      const list = Array.from(hostedRooms.values())
+        .filter((r) => r.visibility === "public" && r.pendingPreviewId === null)
+        // Hide the requester's own room — they already know about it.
+        .filter((r) => r.hostSocketId !== socket.id && r.hostUserId !== me.userId)
+        // Hide rooms hosted by users this client has blocked, and rooms
+        // whose host has blocked us (symmetric, mirrors join_queue).
+        .filter((r) => !me.blocked.has(r.hostHandle))
+        .filter((r) => {
+          const host = users.get(r.hostSocketId);
+          return !(host && host.blocked.has(me.handle));
+        })
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map(publicRoomSummary);
+      socket.emit("open_rooms", { rooms: list });
+    });
+
+    socket.on("join_room_by_code", async (payload: { code?: string }) => {
+      if (!me.userId) {
+        return socket.emit("error_message", { message: "Sign in to join a room." });
+      }
+      const raw = (payload?.code || "").toString();
+      const code = normalizeRoomCode(raw);
+      if (!isValidRoomCode(code)) {
+        return socket.emit("error_message", { message: "That code doesn't look right." });
+      }
+      const room = hostedRooms.get(code);
+      if (!room) {
+        return socket.emit("error_message", { message: "Room not found — it may have closed." });
+      }
+      if (room.pendingPreviewId) {
+        return socket.emit("error_message", {
+          message: "Someone else is already trying to join that room. Try again in a moment.",
+        });
+      }
+      if (room.hostUserId === me.userId) {
+        return socket.emit("error_message", { message: "You can't join your own room." });
+      }
+      if (me.roomId) {
+        return socket.emit("error_message", {
+          message: "Finish your current game before joining another room.",
+        });
+      }
+      // Balance check upfront — saves an awkward decline after preview.
+      const balance = await getBalance(me.userId);
+      if (balance == null || balance < room.ante) {
+        return socket.emit("error_message", {
+          message: `Not enough points (${balance ?? 0} < ${room.ante}).`,
+        });
+      }
+      const host = users.get(room.hostSocketId);
+      if (!host || !host.userId) {
+        cancelHostedRoom(io, code, "host_disconnected");
+        return socket.emit("error_message", { message: "Host has left — room closed." });
+      }
+      pairForPreview(
+        io,
+        socket.id,
+        room.hostSocketId,
+        room.gameType,
+        room.durationMin,
+        room.ante,
+        "hosted_room",
+        code,
+      );
+    });
+
+    socket.on("accept_match_preview", async (payload: { previewId?: string }) => {
+      const previewId = (payload?.previewId || "").toString();
+      const preview = matchPreviews.get(previewId);
+      if (!preview) return;
+      const isA = preview.aSocketId === socket.id;
+      const isB = preview.bSocketId === socket.id;
+      if (!isA && !isB) return;
+      if (isA) preview.aAccepted = true;
+      if (isB) preview.bAccepted = true;
+      log("preview_accepted", {
+        id: previewId,
+        who: isA ? preview.aHandle : preview.bHandle,
+      });
+      // Tell the peer that this side accepted (UX cue: "they're in").
+      const peerSocketId = isA ? preview.bSocketId : preview.aSocketId;
+      io.to(peerSocketId).emit("match_preview_peer_accepted", { previewId });
+      // Echo to the acceptor so their UI flips to "waiting on peer".
+      io.to(socket.id).emit("match_preview_acked", { previewId });
+      if (preview.aAccepted && preview.bAccepted) {
+        await consumeMatchPreviewAndStart(io, previewId);
+      }
+    });
+
+    socket.on("decline_match_preview", (payload: { previewId?: string }) => {
+      const previewId = (payload?.previewId || "").toString();
+      const preview = matchPreviews.get(previewId);
+      if (!preview) return;
+      if (preview.aSocketId !== socket.id && preview.bSocketId !== socket.id) return;
+      cancelMatchPreview(io, previewId, "declined", socket.id);
     });
 
     // Pool matchmaking — single shared queue per gameType with fixed
@@ -563,7 +969,7 @@ export function registerSocketHandlers(io: Server) {
       }
 
       // Real peer found — cancel any pending bot timer for either
-      // side, then pair.
+      // side, then pair via the preview flow.
       const peerId = q.splice(peerIdx, 1)[0];
       for (const sid of [socket.id, peerId]) {
         const t = poolBotTimers.get(sid);
@@ -572,8 +978,8 @@ export function registerSocketHandlers(io: Server) {
           poolBotTimers.delete(sid);
         }
       }
-      const ok = await startGameBetween(io, socket.id, peerId, gameType, durationMin, ante);
-      if (!ok) {
+      const preview = pairForPreview(io, socket.id, peerId, gameType, durationMin, ante, "pool", null);
+      if (!preview) {
         q.push(socket.id);
         socket.emit("pool_waiting", { gameType, durationMin, ante });
       }
@@ -748,6 +1154,20 @@ export function registerSocketHandlers(io: Server) {
       removeFromGameQueues(socket.id);
       unregisterDeviceSocket(socket.id);
       cleanupInvitesForSocket(io, socket.id);
+      // Stage 12b — cancel hosted rooms + previews this socket owns.
+      for (const room of Array.from(hostedRooms.values())) {
+        if (room.hostSocketId === socket.id) {
+          if (room.pendingPreviewId) {
+            cancelMatchPreview(io, room.pendingPreviewId, "peer_disconnected");
+          }
+          cancelHostedRoom(io, room.code, "host_disconnected");
+        }
+      }
+      for (const preview of Array.from(matchPreviews.values())) {
+        if (preview.aSocketId === socket.id || preview.bSocketId === socket.id) {
+          cancelMatchPreview(io, preview.id, "peer_disconnected", socket.id);
+        }
+      }
       const botTimer = poolBotTimers.get(socket.id);
       if (botTimer) {
         clearTimeout(botTimer);

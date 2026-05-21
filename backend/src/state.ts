@@ -100,6 +100,69 @@ export type Invite = {
 };
 export const invites = new Map<string, Invite>();
 
+// Stage 12b — hosted rooms.
+//
+// A HostedRoom is a not-yet-started game that one player has opened with
+// chosen settings. Another player can join it by code, by browsing the
+// public list, or — if visibility is "public" — by being matched into it
+// via random pool (Stage 12c). Once both sides accept the match_preview,
+// the room is consumed: the hosted entry is deleted and a Game is created
+// via startGameBetween. If the host cancels or the room times out, the
+// entry is removed and no game starts.
+//
+// In-memory only. A Render cold-start wipes all open rooms; that is
+// correct — hosts will simply re-open.
+export type RoomVisibility = "public" | "private";
+export type HostedRoomCode = string; // 6 chars, no-ambiguity alphabet.
+
+export type HostedRoom = {
+  code: HostedRoomCode;
+  hostSocketId: SocketId;
+  hostUserId: UserId;
+  hostHandle: string;
+  gameType: GameType;
+  durationMin: GameDuration;
+  ante: number;
+  visibility: RoomVisibility;
+  createdAt: number;
+  // Auto-cancel timer (10 min idle TTL).
+  ttlTimer: NodeJS.Timeout | null;
+  // When a joiner has been paired with this room, the room enters
+  // "preview" — locked while we await both accepts. Stored as the
+  // pending match preview id; null when the room is open and free.
+  pendingPreviewId: string | null;
+};
+export const hostedRooms = new Map<HostedRoomCode, HostedRoom>();
+
+// Stage 12b — match previews.
+//
+// Every pairing — random-pool match, code-join, browse-join, hosted-match
+// — runs through a 15s preview window before chargeAntes/startGameBetween.
+// Either side declining (or timing out) returns both players to lobby.
+// If the joiner came in via a hosted room, declining re-opens the room.
+export type MatchPreviewSource = "pool" | "hosted_room" | "invite";
+export type MatchPreview = {
+  id: string;
+  aSocketId: SocketId;
+  aUserId: UserId;
+  aHandle: string;
+  aAccepted: boolean;
+  bSocketId: SocketId;
+  bUserId: UserId;
+  bHandle: string;
+  bAccepted: boolean;
+  gameType: GameType;
+  durationMin: GameDuration;
+  ante: number;
+  source: MatchPreviewSource;
+  // For hosted_room: the room's code, so we can re-open it on decline.
+  hostedRoomCode: HostedRoomCode | null;
+  createdAt: number;
+  expiresAt: number;
+  expiryTimer: NodeJS.Timeout | null;
+};
+export const matchPreviews = new Map<string, MatchPreview>();
+
 export function getQueue(tag: string): SocketId[] {
   let q = queues.get(tag);
   if (!q) {
